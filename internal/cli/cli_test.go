@@ -97,7 +97,7 @@ func TestMissingScriptFails(t *testing.T) {
 func TestScriptShorthandAndArguments(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "hello.luau")
 	source := `
-		local process = require("@std/process")
+		local process = require("@ceilo/process")
 		assert(select("#", ...) == #process.args)
 		for i = 1, #process.args do
 			assert(select(i, ...) == process.args[i])

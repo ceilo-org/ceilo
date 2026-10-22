@@ -38,7 +38,7 @@ func runWithYieldingModule(t *testing.T, main, module string, onError func(error
 	if err := L.OpenRequire(requirer); err != nil {
 		t.Fatal(err)
 	}
-	if err := L.RegisterModule("@std/task", scheduler.Module()); err != nil {
+	if err := L.RegisterModule("@ceilo/task", scheduler.Module()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -62,7 +62,7 @@ func TestRequireModuleCanYieldOnTaskWait(t *testing.T) {
 	L, ok := runWithYieldingModule(
 		t,
 		`result = require("./module").value`,
-		`local task = require("@std/task"); task.wait(0.001); task.wait(0.001); return {value = 42}`,
+		`local task = require("@ceilo/task"); task.wait(0.001); task.wait(0.001); return {value = 42}`,
 		func(err error) { t.Errorf("unexpected task error: %v", err) },
 	)
 	if !ok {
@@ -76,7 +76,7 @@ func TestRequireModuleCanYieldOnTaskWait(t *testing.T) {
 func TestTaskWaitResumesRegularAndSpawnedTasks(t *testing.T) {
 	L, ok := runWithYieldingModule(
 		t,
-		`local task = require("@std/task"); task.spawn(function() task.wait(0.001); spawned = true end); task.wait(0.002); resumed = true`,
+		`local task = require("@ceilo/task"); task.spawn(function() task.wait(0.001); spawned = true end); task.wait(0.002); resumed = true`,
 		`return true`,
 		func(err error) { t.Errorf("unexpected task error: %v", err) },
 	)
@@ -93,7 +93,7 @@ func TestTaskWaitResumesRegularAndSpawnedTasks(t *testing.T) {
 func TestTaskDeferRunsAtNextSchedulerOpportunityWithArguments(t *testing.T) {
 	L, ok := runWithYieldingModule(
 		t,
-		`local task = require("@std/task")
+		`local task = require("@ceilo/task")
 		local stage = "before yield"
 		local handle = task.defer(function(a, b)
 			seenStage = stage
@@ -123,7 +123,7 @@ func TestTaskDeferRunsAtNextSchedulerOpportunityWithArguments(t *testing.T) {
 func TestTaskCancelStopsDeferredTask(t *testing.T) {
 	L, ok := runWithYieldingModule(
 		t,
-		`local task = require("@std/task")
+		`local task = require("@ceilo/task")
 		local handle = task.defer(function()
 			deferred = true
 		end)
@@ -143,7 +143,7 @@ func TestTaskCancelStopsDeferredTask(t *testing.T) {
 func TestTaskCancelStopsSpawnedTaskAfterWait(t *testing.T) {
 	L, ok := runWithYieldingModule(
 		t,
-		`local task = require("@std/task")
+		`local task = require("@ceilo/task")
 		local handle = task.spawn(function()
 			task.wait(0.001)
 			first = true
@@ -169,7 +169,7 @@ func TestTaskCancelStopsSpawnedTaskAfterWait(t *testing.T) {
 func TestTaskDelayRunsFunctionWithArguments(t *testing.T) {
 	L, ok := runWithYieldingModule(
 		t,
-		`local task = require("@std/task")
+		`local task = require("@ceilo/task")
 		local handle = task.delay(0.001, function(a, b)
 			delayed = a + b
 		end, 20, 22)
@@ -192,7 +192,7 @@ func TestTaskDelayRunsFunctionWithArguments(t *testing.T) {
 func TestTaskCancelStopsDelayedTask(t *testing.T) {
 	L, ok := runWithYieldingModule(
 		t,
-		`local task = require("@std/task")
+		`local task = require("@ceilo/task")
 		local handle = task.delay(0.02, function()
 			delayed = true
 		end)
@@ -215,7 +215,7 @@ func TestYieldingModuleErrorCanBeCaughtByPcall(t *testing.T) {
 	L, ok := runWithYieldingModule(
 		t,
 		`local ok, err = pcall(function() return require("./module") end); result = ok; message = tostring(err)`,
-		`require("@std/task").wait(0.001); error("module failed")`,
+		`require("@ceilo/task").wait(0.001); error("module failed")`,
 		func(err error) { errors = append(errors, err) },
 	)
 	if !ok {
@@ -239,7 +239,7 @@ func TestYieldingModuleErrorReachesScheduler(t *testing.T) {
 	_, ok := runWithYieldingModule(
 		t,
 		`return require("./module")`,
-		`require("@std/task").wait(0.001); error("module failed")`,
+		`require("@ceilo/task").wait(0.001); error("module failed")`,
 		func(err error) { reported = err },
 	)
 	if ok {

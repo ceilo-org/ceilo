@@ -16,14 +16,14 @@ func TestTimeAndDurationModules(t *testing.T) {
 	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterModules(state, "@std/time"); err != nil {
+	if err := RegisterModules(state, "@ceilo/time"); err != nil {
 		t.Fatal(err)
 	}
 
 	script := `
-		local time = require("@std/time")
+		local time = require("@ceilo/time")
 		local duration = time.duration
-		local requiredDuration = require("@std/time/duration")
+		local requiredDuration = require("@ceilo/time/duration")
 
 		local oneSecond = duration.seconds(1)
 		local quarterSecond = requiredDuration.create(0, 250000000)
@@ -69,14 +69,14 @@ func TestDurationRejectsInvalidOperations(t *testing.T) {
 	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterModules(state, "@std/time"); err != nil {
+	if err := RegisterModules(state, "@ceilo/time"); err != nil {
 		t.Fatal(err)
 	}
 
 	for _, script := range []string{
-		`require("@std/time").duration.seconds(0 / 0)`,
-		`require("@std/time/duration").seconds(1) / 0`,
-		`require("@std/time").duration.seconds(1) + 1`,
+		`require("@ceilo/time").duration.seconds(0 / 0)`,
+		`require("@ceilo/time/duration").seconds(1) / 0`,
+		`require("@ceilo/time").duration.seconds(1) + 1`,
 	} {
 		if err := state.DoString(script); err == nil {
 			t.Errorf("DoString(%q) succeeded, want an error", script)

@@ -52,12 +52,12 @@ func TestModuleFileAndDirectoryOperations(t *testing.T) {
 	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@std/fs", Module()); err != nil {
+	if err := state.RegisterModule("@ceilo/fs", Module()); err != nil {
 		t.Fatal(err)
 	}
 
 	script := `
-		local fs = require("@std/fs")
+		local fs = require("@ceilo/fs")
 		local dir, file, copy, moved, hardlink, symlink, nested, nestedRoot =
 			%s, %s, %s, %s, %s, %s, %s, %s
 		fs.mkdir(nested, true)
@@ -131,7 +131,7 @@ func TestModuleFileAndDirectoryOperations(t *testing.T) {
 }
 
 func TestTypedefCompiles(t *testing.T) {
-	content, err := os.ReadFile(filepath.Join("..", "..", "..", "typedefs", "std", "fs.luau"))
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "typedefs", "fs.luau"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestWatchCallsBackUntilStopped(t *testing.T) {
 	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@std/fs", Module()); err != nil {
+	if err := state.RegisterModule("@ceilo/fs", Module()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,7 +160,7 @@ func TestWatchCallsBackUntilStopped(t *testing.T) {
 	}()
 
 	script := fmt.Sprintf(`
-		local fs = require("@std/fs")
+		local fs = require("@ceilo/fs")
 		local called = false
 		fs.watch(%s, function(event)
 			assert(event.name ~= nil and event.name ~= "")

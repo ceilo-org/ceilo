@@ -1,9 +1,8 @@
 {
-    "aliases": {
-        "transform": "@std/commands/transform/types",
-        "lint": "@std/commands/lint/types",
-        "lute": "~/.lute/typedefs/1.0.1/lute",
-        "std": "~/.lute/typedefs/1.0.1/std",
-        "ceilo": "./typedef/ceilo"
-    }
+  "languageMode": "strict",
+  "aliases": {
+    "extra": "./.seal/extra/",
+    "std": "./.seal/typedefs/std/",
+    "interop": "./.seal/typedefs/interop/"
+  }
 }

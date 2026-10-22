@@ -30,8 +30,7 @@ type Options struct {
 	Stderr    io.Writer
 }
 
-var StdLibPrefix = "@std/"
-var CeigoLibPrefix = "@ceigo/"
+var LibPrefix = "@ceilo/"
 
 // RunFile runs a script file. This is a placeholder: it only reads the file
 // and says what it would do. The next step replaces it with the real runtime.
@@ -78,10 +77,10 @@ func RunFile(ctx context.Context, opts Options) error {
 	}
 
 	modules := map[string]map[string]luau.Func{
-		StdLibPrefix + "task": newTask.Module(),
-		StdLibPrefix + "fs":   stdfs.Module(),
-		StdLibPrefix + "io":   stdio.Module(),
-		StdLibPrefix + "json": stdjson.Module(),
+		LibPrefix + "task": newTask.Module(),
+		LibPrefix + "fs":   stdfs.Module(),
+		LibPrefix + "io":   stdio.Module(),
+		LibPrefix + "json": stdjson.Module(),
 	}
 
 	for path, funcs := range modules {
@@ -89,10 +88,10 @@ func RunFile(ctx context.Context, opts Options) error {
 			return fmt.Errorf("error: %v", err)
 		}
 	}
-	if err := stdprocess.Register(L, StdLibPrefix+"process", opts.Args, newTask.QueueCallback); err != nil {
+	if err := stdprocess.Register(L, LibPrefix+"process", opts.Args, newTask.QueueCallback); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
-	if err := stdtime.RegisterModules(L, StdLibPrefix+"time"); err != nil {
+	if err := stdtime.RegisterModules(L, LibPrefix+"time"); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
 	bc, err := luau.Compile(string(src))
