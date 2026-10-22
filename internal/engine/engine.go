@@ -115,6 +115,12 @@ func RunFile(ctx context.Context, opts Options) error {
 		return fmt.Errorf("error: %v", err)
 	}
 
+	for _, arg := range opts.Args {
+		if err := th.Push(arg); err != nil {
+			return fmt.Errorf("error: %v", err)
+		}
+	}
+
 	newTask.Start(th, len(opts.Args))
 	if !newTask.Run() {
 		os.Exit(1)

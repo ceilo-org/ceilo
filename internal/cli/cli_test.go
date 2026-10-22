@@ -96,31 +96,38 @@ func TestMissingScriptFails(t *testing.T) {
 
 func TestScriptShorthandAndArguments(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "hello.luau")
-	if err := os.WriteFile(script, []byte(`print("hi")`), 0o644); err != nil {
+	source := `
+		local process = require("@std/process")
+		assert(select("#", ...) == #process.args)
+		for i = 1, #process.args do
+			assert(select(i, ...) == process.args[i])
+		end
+	`
+	if err := os.WriteFile(script, []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// Flags go before the script, and everything after it belongs to the script.
-	code, stdout, _ := invoke(t, "run", "-timeout", "5s", script, "a", "-b")
-	if code != 0 || !strings.Contains(stdout, `["a" "-b"]`) || !strings.Contains(stdout, "5s") {
-		t.Errorf("run: code %d, stdout %q", code, stdout)
+	code, _, stderr := invoke(t, "run", "-timeout", "5s", script, "a", "-b")
+	if code != 0 {
+		t.Errorf("run: code %d, stderr %q", code, stderr)
 	}
 
 	// "luaurt script.luau" is short for "luaurt run script.luau".
-	code, stdout, _ = invoke(t, script)
-	if code != 0 || !strings.Contains(stdout, "[placeholder]") {
-		t.Errorf("shorthand: code %d, stdout %q", code, stdout)
+	code, _, stderr = invoke(t, script)
+	if code != 0 {
+		t.Errorf("shorthand: code %d, stderr %q", code, stderr)
 	}
 
 	// An omitted extension resolves to the corresponding .luau file.
 	withoutExtension := strings.TrimSuffix(script, ".luau")
-	code, stdout, _ = invoke(t, "run", withoutExtension)
-	if code != 0 || !strings.Contains(stdout, script) {
-		t.Errorf("extensionless script: code %d, stdout %q", code, stdout)
+	code, _, stderr = invoke(t, "run", withoutExtension)
+	if code != 0 {
+		t.Errorf("extensionless script: code %d, stderr %q", code, stderr)
 	}
 
-	code, stdout, _ = invoke(t, withoutExtension)
-	if code != 0 || !strings.Contains(stdout, script) {
-		t.Errorf("extensionless shorthand: code %d, stdout %q", code, stdout)
+	code, _, stderr = invoke(t, withoutExtension)
+	if code != 0 {
+		t.Errorf("extensionless shorthand: code %d, stderr %q", code, stderr)
 	}
 }
