@@ -1,0 +1,7 @@
+# Manifest for this project. See https://luaupm.com/docs
+# Add dependencies with `embr add <scope/name>`, then run `embr install`.
+
+[dependencies]
+
+[tools]
+lute = "luau-lang/lute@1.0.1-nightly.20260923"

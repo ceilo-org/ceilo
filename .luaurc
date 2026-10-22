@@ -1,0 +1,9 @@
+{
+    "aliases": {
+        "transform": "@std/commands/transform/types",
+        "lint": "@std/commands/lint/types",
+        "lute": "~/.lute/typedefs/1.0.1/lute",
+        "std": "~/.lute/typedefs/1.0.1/std",
+        "ceilo": "./typedef/ceilo"
+    }
+}
