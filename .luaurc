@@ -1,8 +1,6 @@
 {
   "languageMode": "strict",
   "aliases": {
-    "extra": "./.seal/extra/",
-    "std": "./.seal/typedefs/std/",
-    "interop": "./.seal/typedefs/interop/"
+    "ceilo": "./typedefs/"
   }
 }

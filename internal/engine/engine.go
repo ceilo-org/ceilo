@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Leoj030/go-luau/luau"
+	stdbcrypt "github.com/ceilo-org/ceilo/internal/stdlib/bcrypt"
 	stdfs "github.com/ceilo-org/ceilo/internal/stdlib/fs"
 	stdio "github.com/ceilo-org/ceilo/internal/stdlib/io"
 	stdjson "github.com/ceilo-org/ceilo/internal/stdlib/json"
@@ -77,10 +78,11 @@ func RunFile(ctx context.Context, opts Options) error {
 	}
 
 	modules := map[string]map[string]luau.Func{
-		LibPrefix + "task": newTask.Module(),
-		LibPrefix + "fs":   stdfs.Module(),
-		LibPrefix + "io":   stdio.Module(),
-		LibPrefix + "json": stdjson.Module(),
+		LibPrefix + "task":   newTask.Module(),
+		LibPrefix + "fs":     stdfs.Module(),
+		LibPrefix + "io":     stdio.Module(),
+		LibPrefix + "json":   stdjson.Module(),
+		LibPrefix + "bcrypt": stdbcrypt.Module(),
 	}
 
 	for path, funcs := range modules {
