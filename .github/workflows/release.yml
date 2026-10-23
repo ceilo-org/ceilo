@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }} / ${{ matrix.architecture }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            architecture: x86_64
+            runner: ubuntu-latest
+            output: bin/ceilo
+          - os: linux
+            architecture: arm64
+            runner: ubuntu-24.04-arm
+            output: bin/ceilo
+          - os: windows
+            architecture: x86_64
+            runner: windows-latest
+            output: bin/ceilo.exe
+          - os: macos
+            architecture: arm64
+            runner: macos-15
+            output: bin/ceilo
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+
+      - name: Create binary directory
+        run: mkdir -p bin
+        shell: bash
+
+      - name: Build binary
+        run: go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o "${{ matrix.output }}" ./cmd/ceilo
+        shell: bash
+
+      - name: Create archive
+        if: runner.os != 'Windows'
+        run: python3 -c "import zipfile; zipfile.ZipFile('ceilo-${{ matrix.os }}-${{ matrix.architecture }}.zip', 'w', zipfile.ZIP_DEFLATED).write('${{ matrix.output }}', '${{ matrix.output }}'.split('/')[-1])"
+        shell: bash
+
+      - name: Create Windows archive
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path "${{ matrix.output }}" -DestinationPath "ceilo-${{ matrix.os }}-${{ matrix.architecture }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ceilo-${{ matrix.os }}-${{ matrix.architecture }}
+          path: ceilo-${{ matrix.os }}-${{ matrix.architecture }}.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ceilo-*
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/*.zip

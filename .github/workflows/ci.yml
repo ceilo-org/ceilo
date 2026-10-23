@@ -8,16 +8,24 @@ on:
 
 jobs:
   test:
-    name: ${{ matrix.os }} / Go ${{ matrix.go }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.platform.name }} / Go ${{ matrix.go }}
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 30
     env:
       GOTOOLCHAIN: local
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         go: ['1.27.1', stable]
+        platform:
+          - name: Linux / x86_64
+            runner: ubuntu-latest
+          - name: Linux / arm64
+            runner: ubuntu-24.04-arm
+          - name: Windows / x86_64
+            runner: windows-latest
+          - name: macOS / arm64
+            runner: macos-15
 
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +35,7 @@ jobs:
           go-version: ${{ matrix.go }}
 
       - name: Check formatting
-        if: runner.os == 'Linux' && matrix.go == 'stable'
+        if: runner.os == 'Linux' && matrix.go == 'stable' && matrix.platform.name == 'Linux / x86_64'
         shell: bash
         run: |
           files=$(gofmt -l $(git ls-files '*.go'))
