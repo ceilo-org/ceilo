@@ -15,23 +15,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
+          include:
           - os: linux
             architecture: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             output: bin/ceilo
+            extld: ''
           - os: linux
-            architecture: arm64
+            architecture: aarch64
             runner: ubuntu-24.04-arm
             output: bin/ceilo
+            extld: ''
           - os: windows
             architecture: x86_64
             runner: windows-latest
             output: bin/ceilo.exe
+            extld: "-extldflags '-static -static-libgcc -static-libstdc++'"
           - os: macos
-            architecture: arm64
+            architecture: aarch64
             runner: macos-15
             output: bin/ceilo
+            extld: ''
     env:
       GOTOOLCHAIN: local
     steps:
@@ -46,8 +50,17 @@ jobs:
         shell: bash
 
       - name: Build binary
-        run: go build -ldflags "-X main.version=${GITHUB_REF_NAME}" -o "${{ matrix.output }}" ./cmd/ceilo
+        run: go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME} ${{ matrix.extld }}" -o "${{ matrix.output }}" ./cmd/ceilo
         shell: bash
+
+      - name: Verify Windows binary has no MinGW runtime deps
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          objdump -p bin/ceilo.exe | grep "DLL Name" || true
+          if objdump -p bin/ceilo.exe | grep -iE "libstdc\+\+|libgcc|libwinpthread"; then
+            echo "Dynamic MinGW dependency found"; exit 1
+          fi
 
       - name: Create archive
         if: runner.os != 'Windows'

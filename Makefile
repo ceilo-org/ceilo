@@ -1,10 +1,10 @@
 .PHONY: build run test vet fmt clean
 
 VERSION ?= dev
-
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
 build:
-	go build -ldflags "-X main.version=$(VERSION)" -o bin/ceilo ./cmd/ceilo
+	go build -ldflags "$(LDFLAGS)" -o bin/ceilo ./cmd/ceilo
 
 # make run ARGS="hello.luau"
 run:
