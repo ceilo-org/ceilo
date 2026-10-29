@@ -1,6 +1,7 @@
 {
   "languageMode": "strict",
   "aliases": {
-    "ceilo": "./typedefs/"
+    "ceilo": "./typedefs/ceilo",
+    "std": "./typedefs/std"
   }
 }

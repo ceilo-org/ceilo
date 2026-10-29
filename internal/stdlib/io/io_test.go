@@ -17,7 +17,7 @@ func TestWriteConcatenatesArgumentsAndArrayTable(t *testing.T) {
 	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@ceilo/io", Module()); err != nil {
+	if err := state.RegisterModule("@std/io", Module()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -32,7 +32,7 @@ func TestWriteConcatenatesArgumentsAndArrayTable(t *testing.T) {
 	defer func() { os.Stdout = originalStdout }()
 
 	if err := state.DoString(`
-		local io = require("@ceilo/io")
+		local io = require("@std/io")
 		io.write("hello", " ", 42, {"!", "?"})
 		io.write({" array", " table"})
 	`); err != nil {

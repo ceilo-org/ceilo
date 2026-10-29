@@ -24,13 +24,13 @@ func Module() map[string]luau.Func {
 }
 
 func deserialize(c *luau.State) (int, error) {
-	input, err := stringArg(c, "decode")
+	input, err := stringArg(c, "deserialize")
 	if err != nil {
 		return 0, err
 	}
 
 	if err := decodeToLuau(c, input); err != nil {
-		return 0, fmt.Errorf("json.decode: %w", err)
+		return 0, fmt.Errorf("json.deserialize: %w", err)
 	}
 	return 1, nil
 }

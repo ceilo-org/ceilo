@@ -18,12 +18,12 @@ func TestDeserializeAndSerialize(t *testing.T) {
 	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@ceilo/json", Module()); err != nil {
+	if err := state.RegisterModule("@std/json", Module()); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := state.DoString(`
-		local json = require("@ceilo/json")
+		local json = require("@std/json")
 		local decoded = json.deserialize('{"name":"Luau","enabled":true,"count":3,"items":[1,"two",null],"meta":{"ok":false}}')
 		local duplicate = json.deserialize('{"value":1,"value":2}')
 		assert(decoded.name == "Luau")
@@ -196,17 +196,17 @@ func TestDeserializeAndSerializeRejectInvalidArguments(t *testing.T) {
 	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@ceilo/json", Module()); err != nil {
+	if err := state.RegisterModule("@std/json", Module()); err != nil {
 		t.Fatal(err)
 	}
 
 	for _, script := range []string{
-		`require("@ceilo/json").deserialize("{")`,
-		`require("@ceilo/json").deserialize(123)`,
-		`require("@ceilo/json").deserialize("{}","extra")`,
-		`require("@ceilo/json").serialize({["key"] = function() end})`,
-		`require("@ceilo/json").serialize({}, "extra")`,
-		`require("@ceilo/json").serialize({}, 1)`,
+		`require("@std/json").deserialize("{")`,
+		`require("@std/json").deserialize(123)`,
+		`require("@std/json").deserialize("{}","extra")`,
+		`require("@std/json").serialize({["key"] = function() end})`,
+		`require("@std/json").serialize({}, "extra")`,
+		`require("@std/json").serialize({}, 1)`,
 	} {
 		if err := state.DoString(script); err == nil {
 			t.Errorf("DoString(%q) succeeded, want an error", script)

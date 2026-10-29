@@ -3,10 +3,14 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"runtime/debug"
 	"syscall"
+	//"runtime"
+	//"time"
 
 	"github.com/ceilo-org/ceilo/internal/cli"
 )
@@ -20,6 +24,16 @@ import (
 var version = "dev"
 
 func main() {
+
+	// go func() {
+	// 	var last int64
+	// 	for range time.Tick(5 * time.Second) {
+	// 		n := runtime.NumCgoCall()
+	// 		fmt.Printf("cgo calls in last 5s: %d\n", n-last)
+	// 		last = n
+	// 	}
+	// }()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := cli.Run(ctx, cli.Env{
 		Name:    "ceilo",
@@ -28,8 +42,19 @@ func main() {
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
 	}, os.Args[1:])
+	if err := writeInterruptNewline(ctx, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "ceilo: write newline: %v\n", err)
+	}
 	stop() // os.Exit doesn't run deferred calls
 	os.Exit(code)
+}
+
+func writeInterruptNewline(ctx context.Context, out io.Writer) error {
+	if ctx.Err() == nil {
+		return nil
+	}
+	_, err := io.WriteString(out, "\n")
+	return err
 }
 
 func buildVersion() string {

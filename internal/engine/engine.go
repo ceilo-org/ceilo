@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"github.com/Leoj030/go-luau/luau"
-	stdbcrypt "github.com/ceilo-org/ceilo/internal/stdlib/bcrypt"
+
+	ceilobcrypt "github.com/ceilo-org/ceilo/internal/ceilolib/bcrypt"
+	ceilonet "github.com/ceilo-org/ceilo/internal/ceilolib/net"
+
 	stdfs "github.com/ceilo-org/ceilo/internal/stdlib/fs"
 	stdio "github.com/ceilo-org/ceilo/internal/stdlib/io"
 	stdjson "github.com/ceilo-org/ceilo/internal/stdlib/json"
@@ -31,7 +34,8 @@ type Options struct {
 	Stderr    io.Writer
 }
 
-var LibPrefix = "@ceilo/"
+var LibPrefix = "@std/"
+var CeiloPrefix = "@ceilo/"
 
 // RunFile runs a script file. This is a placeholder: it only reads the file
 // and says what it would do. The next step replaces it with the real runtime.
@@ -77,18 +81,28 @@ func RunFile(ctx context.Context, opts Options) error {
 		return fmt.Errorf("error: %v", err)
 	}
 
+	serverModule := ceilonet.ServerModule(ctx, newTask, L, report)
+	clientModule := ceilonet.ClientModule(ctx)
 	modules := map[string]map[string]luau.Func{
-		LibPrefix + "task":   newTask.Module(),
-		LibPrefix + "fs":     stdfs.Module(),
-		LibPrefix + "io":     stdio.Module(),
-		LibPrefix + "json":   stdjson.Module(),
-		LibPrefix + "bcrypt": stdbcrypt.Module(),
+		LibPrefix + "task": newTask.Module(),
+		LibPrefix + "fs":   stdfs.Module(),
+		LibPrefix + "io":   stdio.Module(),
+		LibPrefix + "json": stdjson.Module(),
+
+		CeiloPrefix + "bcrypt":     ceilobcrypt.Module(),
+		CeiloPrefix + "net/client": clientModule,
 	}
 
 	for path, funcs := range modules {
 		if err := L.RegisterModule(path, funcs); err != nil {
 			return fmt.Errorf("error: %v", err)
 		}
+	}
+	if err := registerNetModule(L, serverModule["server"], clientModule["request"]); err != nil {
+		return fmt.Errorf("error: %v", err)
+	}
+	if err := registerCallableModule(L, CeiloPrefix+"net/server", "server", serverModule["server"]); err != nil {
+		return fmt.Errorf("error: %v", err)
 	}
 	if err := stdprocess.Register(L, LibPrefix+"process", opts.Args, newTask.QueueCallback); err != nil {
 		return fmt.Errorf("error: %v", err)
@@ -99,8 +113,7 @@ func RunFile(ctx context.Context, opts Options) error {
 	bc, err := luau.Compile(string(src))
 
 	if err != nil {
-		var le *luau.Error
-		if errors.As(err, &le) {
+		if le, ok := errors.AsType[*luau.Error](err); ok {
 			return fmt.Errorf("%s:%d:%d: %s", le.Chunk, le.Line, le.Column, le.Message)
 		}
 		return fmt.Errorf("error: %v", err)
@@ -127,5 +140,55 @@ func RunFile(ctx context.Context, opts Options) error {
 		os.Exit(1)
 	}
 
-	return nil
+	return ctx.Err()
+}
+
+func registerCallableModule(state *luau.State, path, name string, fn luau.Func) error {
+	if err := state.NewTable(0, 1); err != nil {
+		return err
+	}
+	if err := state.PushFunction(name, fn); err != nil {
+		return err
+	}
+	if err := state.SetField(-2, name); err != nil {
+		return err
+	}
+	if err := state.NewTable(0, 1); err != nil {
+		return err
+	}
+	if err := state.PushFunction("__call", fn); err != nil {
+		return err
+	}
+	if err := state.SetField(-2, "__call"); err != nil {
+		return err
+	}
+	if err := state.SetMetatable(-2); err != nil {
+		return err
+	}
+	return state.RegisterModuleTable(path)
+}
+
+func registerNetModule(state *luau.State, server, clientRequest luau.Func) error {
+	if err := state.NewTable(0, 2); err != nil {
+		return err
+	}
+	if err := state.PushFunction("server", server); err != nil {
+		return err
+	}
+	if err := state.SetField(-2, "server"); err != nil {
+		return err
+	}
+	if err := state.NewTable(0, 1); err != nil {
+		return err
+	}
+	if err := state.PushFunction("request", clientRequest); err != nil {
+		return err
+	}
+	if err := state.SetField(-2, "request"); err != nil {
+		return err
+	}
+	if err := state.SetField(-2, "client"); err != nil {
+		return err
+	}
+	return state.RegisterModuleTable(CeiloPrefix + "net")
 }

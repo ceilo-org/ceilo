@@ -1,6 +1,4 @@
-// Task scheduler runs Luau threads cooperatively on one goroutine. It
-// provides the task library: task.wait, task.spawn, task.defer, and
-// task.delay, including waits inside modules that are being loaded with require.
+// task.go
 package task
 
 import (
@@ -8,38 +6,40 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Leoj030/go-luau/luau"
 )
 
-// Options configures a Scheduler.
 type Options struct {
-	// OnError is called for every task that fails.
-	OnError func(error)
-	// BeforeIdle is called right before the scheduler sleeps, so output
-	// written so far shows up while it waits.
+	OnError    func(error)
 	BeforeIdle func()
 }
 
 type Scheduler struct {
 	opts           Options
 	q              queue
+	ready          []*task
+	rhead          int
 	seq            uint64
 	failed         bool
+	mu             sync.Mutex
+	inbox          []command
+	spare          []command
+	hasInbox       atomic.Bool
+	holds          int
+	stopped        bool
 	waitingModules int
 	parkedWaiters  []*task
 	current        *task
 	state          *luau.State
-	callbacks      chan luau.Ref
 	wake           chan struct{}
-	runDone        chan struct{}
-	runOnce        sync.Once
-
-	// task.wait yields (nonce, seconds). A yield that doesn't start with this
-	// per-run secret did not come from task.wait.
-	nonce string
+	nonce          string
+	idle           []*luau.Thread
 }
 
 type task struct {
@@ -47,62 +47,126 @@ type task struct {
 	control       *taskControl
 	isMain        bool
 	started       bool
-	nargs         int       // arguments already on the stack for the first resume
-	wake          time.Time // when to resume
+	nargs         int
+	wake          time.Time
 	yieldedAt     time.Time
 	yieldedValues int
 	waitScheduled bool
-	seq           uint64 // FIFO tie-break for equal wake times
+	seq           uint64
 	moduleResume  bool
-	moduleErr     error // non-nil when resuming a failed module require
+	moduleErr     error
 	moduleFailed  bool
+	start         func(*luau.Thread) (int, error)
+	done          func(*luau.Thread, error)
+	pooled        bool
+	completed     bool
 }
 
 type taskControl struct {
 	cancelled bool
 }
 
+type command struct {
+	callback    luau.Ref
+	hasCallback bool
+	submit      *submission
+	post        func()
+}
+
+type submission struct {
+	state *luau.State
+	start func(*luau.Thread) (int, error)
+	done  func(*luau.Thread, error)
+}
+
+const maxIdleThreads = 256
+
 func New(opts Options) *Scheduler {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		panic(err) // the OS random source is broken; nothing sensible to do
+		panic(err)
 	}
 	return &Scheduler{
-		opts:      opts,
-		nonce:     hex.EncodeToString(b),
-		callbacks: make(chan luau.Ref, 64),
-		wake:      make(chan struct{}, 1),
-		runDone:   make(chan struct{}),
+		opts:  opts,
+		nonce: hex.EncodeToString(b),
+		wake:  make(chan struct{}, 1),
 	}
 }
 
-// BindState attaches the owning state used to schedule callbacks from external
-// event sources, such as operating system signals.
 func (s *Scheduler) BindState(state *luau.State) {
 	s.state = state
 }
 
-// QueueCallback schedules a retained Luau function reference on the scheduler's
-// goroutine. It is safe to call from a goroutine that does not own the state.
 func (s *Scheduler) QueueCallback(callback luau.Ref) {
+	_ = s.enqueue(command{callback: callback, hasCallback: true})
+}
+
+func (s *Scheduler) Post(fn func()) error {
+	if fn == nil {
+		return errors.New("task scheduler: cannot post a nil function")
+	}
+	return s.enqueue(command{post: fn})
+}
+
+func (s *Scheduler) Submit(state *luau.State, start func(*luau.Thread) (int, error), done func(*luau.Thread, error)) error {
+	if state == nil {
+		return errors.New("task scheduler: cannot submit a task without a state")
+	}
+	if start == nil {
+		return errors.New("task scheduler: cannot submit a task without a start function")
+	}
+	if done == nil {
+		return errors.New("task scheduler: cannot submit a task without a completion function")
+	}
+	return s.enqueue(command{submit: &submission{state: state, start: start, done: done}})
+}
+
+func (s *Scheduler) Hold() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return errors.New("task scheduler: cannot hold a stopped scheduler")
+	}
+	s.holds++
+	return nil
+}
+
+func (s *Scheduler) Release() error {
+	s.mu.Lock()
+	if s.holds == 0 {
+		s.mu.Unlock()
+		return errors.New("task scheduler: release without a hold")
+	}
+	s.holds--
+	s.mu.Unlock()
+	s.signal()
+	return nil
+}
+
+func (s *Scheduler) enqueue(c command) error {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return errors.New("task scheduler: scheduler has stopped")
+	}
+	s.inbox = append(s.inbox, c)
+	s.hasInbox.Store(true)
+	s.mu.Unlock()
+	s.signal()
+	return nil
+}
+
+func (s *Scheduler) signal() {
 	select {
-	case s.callbacks <- callback:
-		select {
-		case s.wake <- struct{}{}:
-		default:
-		}
-	case <-s.runDone:
+	case s.wake <- struct{}{}:
+	default:
 	}
 }
 
-// Start queues th, with its function and nargs arguments already on its
-// stack, as the main task. If it fails, everything else is abandoned.
 func (s *Scheduler) Start(th *luau.Thread, nargs int) {
-	s.schedule(&task{th: th, control: &taskControl{}, isMain: true, nargs: nargs}, time.Now())
+	s.schedule(&task{th: th, control: &taskControl{}, isMain: true, nargs: nargs}, time.Time{})
 }
 
-// Module returns the functions of the task library, ready for
-// luau.State.RegisterModule.
 func (s *Scheduler) Module() map[string]luau.Func {
 	return map[string]luau.Func{
 		"wait":   s.wait,
@@ -113,8 +177,6 @@ func (s *Scheduler) Module() map[string]luau.Func {
 	}
 }
 
-// ModuleFinished queues a require caller to resume after its module finishes.
-// The waiter is a separate pinned handle and must be closed after it finishes.
 func (s *Scheduler) ModuleFinished(waiter *luau.Thread, err error) {
 	if s.waitingModules > 0 {
 		s.waitingModules--
@@ -126,10 +188,15 @@ func (s *Scheduler) ModuleFinished(waiter *luau.Thread, err error) {
 	if s.current != nil {
 		control = s.current.control
 	}
-	s.schedule(&task{th: waiter, control: control, started: true, moduleResume: true, moduleErr: err}, time.Now())
+	t := &task{th: waiter, control: control, started: true, moduleResume: true, moduleErr: err}
+	if s.current != nil {
+		t.isMain = s.current.isMain
+		t.done = s.current.done
+		s.current.done = nil
+	}
+	s.schedule(t, time.Time{})
 }
 
-// task.wait([seconds]) -> seconds actually waited
 func (s *Scheduler) wait(c *luau.State) (int, error) {
 	sec := 0.0
 	if t := c.TypeName(1); t != "nil" && t != "no value" {
@@ -140,7 +207,7 @@ func (s *Scheduler) wait(c *luau.State) (int, error) {
 		}
 		sec = f
 	}
-	if !(sec > 0) { // negative or NaN
+	if !(sec > 0) {
 		sec = 0
 	}
 	if sec > 1e9 {
@@ -152,48 +219,53 @@ func (s *Scheduler) wait(c *luau.State) (int, error) {
 	if err := c.Push(sec); err != nil {
 		return 0, err
 	}
-	// During require, the active scheduler task is the caller waiting on the
-	// module. Pin the coroutine that actually yielded so the module can finish.
 	th, err := c.Thread()
 	if err != nil {
 		return 0, err
 	}
 	now := time.Now()
 	var control *taskControl
+	var done func(*luau.Thread, error)
+	isMain := false
 	if s.current != nil {
 		control = s.current.control
+		done = s.current.done
+		s.current.done = nil
+		isMain = s.current.isMain
+	}
+	var at time.Time
+	if sec > 0 {
+		at = now.Add(time.Duration(sec * float64(time.Second)))
 	}
 	s.schedule(&task{
 		th:            th,
 		control:       control,
+		isMain:        isMain,
+		done:          done,
 		started:       true,
 		yieldedAt:     now,
 		yieldedValues: 2,
-	}, now.Add(time.Duration(sec*float64(time.Second))))
+	}, at)
 	if s.current != nil {
 		s.current.waitScheduled = true
 	}
 	return c.Yield(2)
 }
 
-// task.spawn(fn, ...): run fn on its own thread, starting on the next
-// scheduler turn (not immediately).
 func (s *Scheduler) spawn(c *luau.State) (int, error) {
 	if c.TypeName(1) != "function" {
 		return 0, errors.New("task.spawn: expected a function")
 	}
-	return s.scheduleTask(c, 1, time.Now())
+	return s.scheduleTask(c, 1, time.Time{})
 }
 
-// task.defer(fn, ...): run fn at the next scheduler opportunity.
 func (s *Scheduler) deferTask(c *luau.State) (int, error) {
 	if c.TypeName(1) != "function" {
 		return 0, errors.New("task.defer: expected a function")
 	}
-	return s.scheduleTask(c, 1, time.Now())
+	return s.scheduleTask(c, 1, time.Time{})
 }
 
-// task.cancel(handle): prevent a thread from running again.
 func (s *Scheduler) cancel(c *luau.State) (int, error) {
 	v, ok := c.ToUserdata(1)
 	control, isTask := v.(*taskControl)
@@ -222,7 +294,6 @@ func (s *Scheduler) delay(c *luau.State) (int, error) {
 	return s.scheduleTask(c, 2, time.Now().Add(time.Duration(seconds*float64(time.Second))))
 }
 
-// scheduleTask queues a task and returns its cancellation handle.
 func (s *Scheduler) scheduleTask(c *luau.State, functionIndex int, wake time.Time) (int, error) {
 	t, err := newTask(c, functionIndex)
 	if err != nil {
@@ -236,7 +307,6 @@ func (s *Scheduler) scheduleTask(c *luau.State, functionIndex int, wake time.Tim
 	return 1, nil
 }
 
-// newTask copies a function and its arguments from c onto a new coroutine.
 func newTask(c *luau.State, functionIndex int) (*task, error) {
 	th, err := c.NewThread()
 	if err != nil {
@@ -262,42 +332,92 @@ func newTask(c *luau.State, functionIndex int) (*task, error) {
 	}, nil
 }
 
-// Run drives tasks until none are left. An error in the main task stops
-// everything; an error in a spawned task is reported and the rest carry on.
-// It reports whether every task succeeded.
 func (s *Scheduler) Run() bool {
-	defer s.runOnce.Do(func() { close(s.runDone) })
+	defer s.finish()
+
+	stats := os.Getenv("CEILO_SCHED_STATS") != ""
+	var idle time.Duration
+	if stats {
+		began := time.Now()
+		defer func() {
+			total := time.Since(began)
+			fmt.Fprintf(os.Stderr, "scheduler: busy %.0f%% of %v\n",
+				100*(1-idle.Seconds()/total.Seconds()), total.Round(time.Millisecond))
+		}()
+	}
+
 	for {
-		s.scheduleCallbacks()
-		if len(s.q) == 0 {
-			break
+		s.processCommands()
+
+		if len(s.q) > 0 {
+			now := time.Now()
+			for len(s.q) > 0 && !s.q[0].wake.After(now) {
+				s.ready = append(s.ready, heap.Pop(&s.q).(*task))
+			}
 		}
-		t := heap.Pop(&s.q).(*task)
-		if t.control != nil && t.control.cancelled {
-			t.th.Close()
-			continue
-		}
-		if d := time.Until(t.wake); d > 0 {
+
+		var t *task
+		switch {
+		case s.rhead < len(s.ready):
+			t = s.popReady()
+
+		case len(s.q) > 0:
+			t = heap.Pop(&s.q).(*task)
+			if t.control != nil && t.control.cancelled {
+				s.finishTask(t, errors.New("task cancelled"))
+				continue
+			}
+			if d := time.Until(t.wake); d > 0 {
+				if s.opts.BeforeIdle != nil {
+					s.opts.BeforeIdle()
+				}
+				timer := time.NewTimer(d)
+				select {
+				case <-timer.C:
+				case <-s.wake:
+					if !timer.Stop() {
+						<-timer.C
+					}
+					heap.Push(&s.q, t)
+					continue
+				}
+			}
+
+		default:
+			s.mu.Lock()
+			if s.hasInbox.Load() {
+				s.mu.Unlock()
+				continue
+			}
+			if s.holds == 0 {
+				s.mu.Unlock()
+				return !s.failed
+			}
+			s.mu.Unlock()
 			if s.opts.BeforeIdle != nil {
 				s.opts.BeforeIdle()
 			}
-			timer := time.NewTimer(d)
-			select {
-			case <-timer.C:
-			case <-s.wake:
-				if !timer.Stop() {
-					<-timer.C
-				}
-				heap.Push(&s.q, t)
-				continue
+			var slept time.Time
+			if stats {
+				slept = time.Now()
 			}
+			<-s.wake
+			if stats {
+				idle += time.Since(slept)
+			}
+			continue
+		}
+
+		if t.control != nil && t.control.cancelled {
+			s.finishTask(t, errors.New("task cancelled"))
+			continue
 		}
 		finished, err := s.step(t)
 		if t.control != nil && t.control.cancelled {
 			finished = true
 		}
 		if err != nil && t.moduleFailed {
-			err = nil // module errors are delivered to require's caller
+			err = nil
 		}
 		if err != nil {
 			s.failed = true
@@ -306,78 +426,142 @@ func (s *Scheduler) Run() bool {
 			}
 		}
 		if finished {
-			t.th.Close()
+			s.finishTask(t, err)
 		}
 		if err != nil && t.isMain {
 			for _, rest := range s.q {
-				rest.th.Close()
+				s.finishTask(rest, err)
+			}
+			for _, rest := range s.ready[s.rhead:] {
+				s.finishTask(rest, err)
 			}
 			s.closeParkedWaiters()
 			return false
 		}
 	}
-	if s.waitingModules > 0 {
-		err := errors.New("task yielded without task.wait or a yielding module")
-		s.failed = true
-		if s.opts.OnError != nil {
-			s.opts.OnError(err)
-		}
-		for _, t := range s.parkedWaiters {
-			if t.isMain {
-				s.closeParkedWaiters()
-				return false
-			}
-		}
-	}
-	s.closeParkedWaiters()
-	return !s.failed
 }
 
-func (s *Scheduler) scheduleCallbacks() {
-	for {
-		select {
-		case callback := <-s.callbacks:
-			if s.state == nil {
-				s.failed = true
-				if s.opts.OnError != nil {
-					s.opts.OnError(errors.New("task scheduler has no state for an external callback"))
-				}
-				continue
+func (s *Scheduler) processCommands() {
+	for s.hasInbox.Load() {
+		s.mu.Lock()
+		pending := s.inbox
+		s.inbox = s.spare[:0]
+		s.hasInbox.Store(false)
+		s.mu.Unlock()
+
+		for _, c := range pending {
+			switch {
+			case c.post != nil:
+				c.post()
+			case c.submit != nil:
+				s.scheduleSubmission(c.submit)
+			case c.hasCallback:
+				s.scheduleCallback(c.callback)
 			}
-			th, err := s.state.NewThread()
-			if err == nil {
-				err = th.PushRef(callback)
-			}
-			if err != nil {
-				if th != nil {
-					th.Close()
-				}
-				s.failed = true
-				if s.opts.OnError != nil {
-					s.opts.OnError(err)
-				}
-				continue
-			}
-			s.schedule(&task{th: th, control: &taskControl{}}, time.Now())
-		default:
-			return
 		}
+		for i := range pending {
+			pending[i] = command{}
+		}
+		s.spare = pending[:0]
 	}
 }
 
-// step resumes t once. It reports whether the task is finished.
+func (s *Scheduler) scheduleCallback(callback luau.Ref) {
+	if s.state == nil {
+		s.report(errors.New("task scheduler has no state for an external callback"))
+		return
+	}
+	th, err := s.state.NewThread()
+	if err == nil {
+		err = th.PushRef(callback)
+	}
+	if err != nil {
+		if th != nil {
+			th.Close()
+		}
+		s.report(err)
+		return
+	}
+	s.schedule(&task{th: th}, time.Time{})
+}
+
+func (s *Scheduler) scheduleSubmission(sub *submission) {
+	th, err := s.thread(sub.state)
+	if err != nil {
+		sub.done(nil, err)
+		s.report(err)
+		return
+	}
+	s.schedule(&task{
+		th:     th,
+		start:  sub.start,
+		done:   sub.done,
+		pooled: sub.state == s.state && s.state != nil,
+	}, time.Time{})
+}
+
+func (s *Scheduler) thread(state *luau.State) (*luau.Thread, error) {
+	if state == s.state && s.state != nil {
+		if n := len(s.idle); n > 0 {
+			th := s.idle[n-1]
+			s.idle[n-1] = nil
+			s.idle = s.idle[:n-1]
+			return th, nil
+		}
+	}
+	return state.NewThread()
+}
+
+func (s *Scheduler) finishTask(t *task, err error) {
+	if t.done != nil {
+		t.done(t.th, err)
+	}
+	if t.pooled && t.completed && err == nil && len(s.idle) < maxIdleThreads && t.th.Reset() == nil {
+		s.idle = append(s.idle, t.th)
+		return
+	}
+	t.th.Close()
+}
+
+func (s *Scheduler) report(err error) {
+	s.failed = true
+	if s.opts.OnError != nil {
+		s.opts.OnError(err)
+	}
+}
+
+func (s *Scheduler) finish() {
+	s.mu.Lock()
+	s.stopped = true
+	s.inbox = nil
+	s.hasInbox.Store(false)
+	s.mu.Unlock()
+
+	for _, th := range s.idle {
+		th.Close()
+	}
+	s.idle = nil
+}
+
 func (s *Scheduler) step(t *task) (finished bool, err error) {
 	nargs := t.nargs
 	var n int
 	var done bool
-	if t.moduleResume {
+	if t.start != nil {
+		nargs, err = t.start(t.th)
+		t.start = nil
+		if err != nil {
+			return true, err
+		}
+		s.current = t
+		n, done, err = t.th.ResumeN(nargs)
+		s.current = nil
+	} else if t.moduleResume {
 		t.moduleResume = false
 		s.current = t
 		if t.moduleErr != nil {
 			n, done, err = t.th.ResumeError(t.moduleErr)
 		} else {
-			// A successful module result was placed on the waiter's stack by
-			// go-luau, so ResumeN consumes it directly.
 			n, done, err = t.th.ResumeN(1)
 		}
 		s.current = nil
@@ -387,7 +571,6 @@ func (s *Scheduler) step(t *task) (finished bool, err error) {
 				t.th.Pop(t.yieldedValues)
 				t.yieldedValues = 0
 			}
-			// Resuming after task.wait: its result is the time waited.
 			if err := t.th.Push(time.Since(t.yieldedAt).Seconds()); err != nil {
 				return true, err
 			}
@@ -403,7 +586,10 @@ func (s *Scheduler) step(t *task) (finished bool, err error) {
 		return true, err
 	}
 	if done {
-		t.th.Pop(n) // drop returned values
+		t.completed = true
+		if t.done == nil {
+			t.th.Pop(n)
+		}
 		return true, nil
 	}
 
@@ -420,6 +606,7 @@ func (s *Scheduler) step(t *task) (finished bool, err error) {
 	}
 	if t.waitScheduled {
 		t.waitScheduled = false
+		t.pooled = false
 		return true, nil
 	}
 	t.yieldedAt = time.Now()
@@ -434,7 +621,6 @@ func (s *Scheduler) closeParkedWaiters() {
 	s.parkedWaiters = nil
 }
 
-// parseWait recognises the (nonce, seconds) pair that task.wait yields.
 func (s *Scheduler) parseWait(th *luau.Thread, n int) (time.Duration, bool) {
 	if n != 2 {
 		return 0, false
@@ -453,11 +639,30 @@ func (s *Scheduler) parseWait(th *luau.Thread, n int) (time.Duration, bool) {
 
 func (s *Scheduler) schedule(t *task, wake time.Time) {
 	s.seq++
-	t.seq, t.wake = s.seq, wake
+	t.seq = s.seq
+	if wake.IsZero() {
+		s.ready = append(s.ready, t)
+		return
+	}
+	t.wake = wake
 	heap.Push(&s.q, t)
 }
 
-// ---- min-heap ordered by wake time, then insertion order ----
+func (s *Scheduler) popReady() *task {
+	t := s.ready[s.rhead]
+	s.ready[s.rhead] = nil
+	s.rhead++
+	if s.rhead == len(s.ready) {
+		s.ready, s.rhead = s.ready[:0], 0
+	} else if s.rhead >= 1024 && s.rhead*2 >= len(s.ready) {
+		n := copy(s.ready, s.ready[s.rhead:])
+		for i := n; i < len(s.ready); i++ {
+			s.ready[i] = nil
+		}
+		s.ready, s.rhead = s.ready[:n], 0
+	}
+	return t
+}
 
 type queue []*task
 

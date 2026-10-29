@@ -26,10 +26,10 @@ func newTestRuntime(t *testing.T, args []string) (*luau.State, *stdtask.Schedule
 	}
 	scheduler := stdtask.New(stdtask.Options{OnError: func(err error) { t.Errorf("scheduled callback: %v", err) }})
 	scheduler.BindState(state)
-	if err := state.RegisterModule("@ceilo/task", scheduler.Module()); err != nil {
+	if err := state.RegisterModule("@std/task", scheduler.Module()); err != nil {
 		t.Fatal(err)
 	}
-	if err := Register(state, "@ceilo/process", args, scheduler.QueueCallback); err != nil {
+	if err := Register(state, "@std/process", args, scheduler.QueueCallback); err != nil {
 		t.Fatal(err)
 	}
 	return state, scheduler
@@ -58,7 +58,7 @@ func runScript(t *testing.T, state *luau.State, scheduler *stdtask.Scheduler, so
 func TestProcessModuleRunAndOptions(t *testing.T) {
 	state, scheduler := newTestRuntime(t, []string{"first", "second"})
 	runScript(t, state, scheduler, `
-		local process = require("@ceilo/process")
+		local process = require("@std/process")
 		assert(process.args[1] == "first" and process.args[2] == "second")
 		assert(process.cwd() ~= "" and process.homedir() ~= "")
 		assert(process.execPath() ~= "" and process.pid() > 0)
@@ -85,7 +85,7 @@ func TestProcessModuleRunAndOptions(t *testing.T) {
 }
 
 func TestProcessTypedefCompiles(t *testing.T) {
-	source, err := os.ReadFile(filepath.Join("..", "..", "..", "typedefs", "process.luau"))
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "typedefs", "std", "process.luau"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestProcessTypedefCompiles(t *testing.T) {
 func TestProcessRunTimeoutKillsProcessGroup(t *testing.T) {
 	state, scheduler := newTestRuntime(t, nil)
 	runScript(t, state, scheduler, `
-		local result = require("@ceilo/process").run(
+		local result = require("@std/process").run(
 			{"/bin/sh", "-c", "sleep 10 & wait"},
 			{timeout = 0.05}
 		)
@@ -114,8 +114,8 @@ func TestProcessOnSignalQueuesCallbackOnScheduler(t *testing.T) {
 		_ = syscall.Kill(os.Getpid(), syscall.SIGUSR1)
 	}()
 	runScript(t, state, scheduler, `
-		local process = require("@ceilo/process")
-		local task = require("@ceilo/task")
+		local process = require("@std/process")
+		local task = require("@std/task")
 		local handle = process.onSignal("SIGUSR1", function()
 			signalReceived = true
 		end)
