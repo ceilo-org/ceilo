@@ -43,6 +43,67 @@ func TestRunFileReturnsContextCanceledAfterServerShutdown(t *testing.T) {
 	}
 }
 
+func TestRunFileInterruptsInfiniteLoop(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "infinite.luau")
+	if err := os.WriteFile(script, []byte("while true do end"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- RunFile(ctx, Options{Script: script})
+	}()
+
+	timer := time.AfterFunc(20*time.Millisecond, cancel)
+	defer func() {
+		timer.Stop()
+		cancel()
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RunFile error = %v; want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunFile did not stop after context cancellation")
+	}
+}
+
+func TestRunFileInterruptsFileWatch(t *testing.T) {
+	watchedPath := t.TempDir()
+	script := filepath.Join(t.TempDir(), "watch.luau")
+	source := fmt.Sprintf(`
+		local fs = require("@std/fs")
+		fs.watch(%q, function() end)
+	`, watchedPath)
+	if err := os.WriteFile(script, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- RunFile(ctx, Options{Script: script})
+	}()
+
+	timer := time.AfterFunc(20*time.Millisecond, cancel)
+	defer func() {
+		timer.Stop()
+		cancel()
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RunFile error = %v; want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunFile did not stop after context cancellation while watching")
+	}
+}
+
 func TestRunFileMakesNetRequests(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("X-Reply", "first")

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Leoj030/go-luau/luau"
+	stdtask "github.com/ceilo-org/ceilo/internal/stdlib/task"
 )
 
 type runOptions struct {
@@ -46,6 +47,12 @@ func (h *signalHandle) close() {
 // Register registers the process module, including the current script arguments
 // and environment, at path.
 func Register(state *luau.State, path string, args []string, enqueue func(luau.Ref)) error {
+	return RegisterWithContext(context.Background(), nil, state, path, args, enqueue)
+}
+
+// RegisterWithContext registers process operations with task-aware cancellation
+// and signal subscriptions.
+func RegisterWithContext(ctx context.Context, scheduler *stdtask.Scheduler, state *luau.State, path string, args []string, enqueue func(luau.Ref)) error {
 	meta, err := buildSignalHandleMetatable(state)
 	if err != nil {
 		return err
@@ -53,12 +60,12 @@ func Register(state *luau.State, path string, args []string, enqueue func(luau.R
 	functions := map[string]luau.Func{
 		"homedir":  homedir,
 		"cwd":      cwd,
-		"run":      run,
-		"system":   system,
+		"run":      runWithContext(ctx, scheduler),
+		"system":   systemWithContext(ctx, scheduler),
 		"exit":     exit,
 		"execPath": execPath,
 		"pid":      pid,
-		"onSignal": onSignal(enqueue, meta),
+		"onSignal": onSignal(ctx, enqueue, meta),
 	}
 
 	if err := state.NewTable(0, len(functions)+2); err != nil {
@@ -140,49 +147,81 @@ func exit(c *luau.State) (int, error) {
 	return 0, nil
 }
 
-func run(c *luau.State) (int, error) {
-	if c.Top() < 1 || c.Top() > 2 {
-		return 0, fmt.Errorf("process.run: expected 1 or 2 arguments, got %d", c.Top())
+func runWithContext(ctx context.Context, scheduler *stdtask.Scheduler) luau.Func {
+	return func(c *luau.State) (int, error) {
+		if c.Top() < 1 || c.Top() > 2 {
+			return 0, fmt.Errorf("process.run: expected 1 or 2 arguments, got %d", c.Top())
+		}
+		args, err := stringArrayArg(c, "run", 1)
+		if err != nil {
+			return 0, err
+		}
+		if len(args) == 0 || args[0] == "" {
+			return 0, errors.New("process.run: args must include a program")
+		}
+		options, err := parseOptions(c, 2, false)
+		if err != nil {
+			return 0, fmt.Errorf("process.run: %w", err)
+		}
+		if scheduler != nil {
+			return scheduler.Await(c, func(taskCtx context.Context, resume func(func(*luau.Thread) (int, error), error)) {
+				go func() {
+					result, err := execute(taskCtx, args[0], args[1:], options.runOptions)
+					if err != nil {
+						resume(nil, fmt.Errorf("process.run: %w", err))
+						return
+					}
+					resume(func(th *luau.Thread) (int, error) {
+						return 1, pushResult(th, result)
+					}, nil)
+				}()
+			})
+		}
+		result, err := execute(ctx, args[0], args[1:], options.runOptions)
+		if err != nil {
+			return 0, fmt.Errorf("process.run: %w", err)
+		}
+		return 1, pushResult(c, result)
 	}
-	args, err := stringArrayArg(c, "run", 1)
-	if err != nil {
-		return 0, err
-	}
-	if len(args) == 0 || args[0] == "" {
-		return 0, errors.New("process.run: args must include a program")
-	}
-	options, err := parseOptions(c, 2, false)
-	if err != nil {
-		return 0, fmt.Errorf("process.run: %w", err)
-	}
-	result, err := execute(args[0], args[1:], options.runOptions)
-	if err != nil {
-		return 0, fmt.Errorf("process.run: %w", err)
-	}
-	return 1, pushResult(c, result)
 }
 
-func system(c *luau.State) (int, error) {
-	if c.Top() < 1 || c.Top() > 2 {
-		return 0, fmt.Errorf("process.system: expected 1 or 2 arguments, got %d", c.Top())
+func systemWithContext(ctx context.Context, scheduler *stdtask.Scheduler) luau.Func {
+	return func(c *luau.State) (int, error) {
+		if c.Top() < 1 || c.Top() > 2 {
+			return 0, fmt.Errorf("process.system: expected 1 or 2 arguments, got %d", c.Top())
+		}
+		command, err := stringArg(c, "system", 1)
+		if err != nil {
+			return 0, err
+		}
+		options, err := parseOptions(c, 2, true)
+		if err != nil {
+			return 0, fmt.Errorf("process.system: %w", err)
+		}
+		executable, args, err := shellCommand(options.system, command)
+		if err != nil {
+			return 0, fmt.Errorf("process.system: %w", err)
+		}
+		if scheduler != nil {
+			return scheduler.Await(c, func(taskCtx context.Context, resume func(func(*luau.Thread) (int, error), error)) {
+				go func() {
+					result, err := execute(taskCtx, executable, args, options.runOptions)
+					if err != nil {
+						resume(nil, fmt.Errorf("process.system: %w", err))
+						return
+					}
+					resume(func(th *luau.Thread) (int, error) {
+						return 1, pushResult(th, result)
+					}, nil)
+				}()
+			})
+		}
+		result, err := execute(ctx, executable, args, options.runOptions)
+		if err != nil {
+			return 0, fmt.Errorf("process.system: %w", err)
+		}
+		return 1, pushResult(c, result)
 	}
-	command, err := stringArg(c, "system", 1)
-	if err != nil {
-		return 0, err
-	}
-	options, err := parseOptions(c, 2, true)
-	if err != nil {
-		return 0, fmt.Errorf("process.system: %w", err)
-	}
-	executable, args, err := shellCommand(options.system, command)
-	if err != nil {
-		return 0, fmt.Errorf("process.system: %w", err)
-	}
-	result, err := execute(executable, args, options.runOptions)
-	if err != nil {
-		return 0, fmt.Errorf("process.system: %w", err)
-	}
-	return 1, pushResult(c, result)
 }
 
 type systemOptions struct {
@@ -301,7 +340,7 @@ func stringArg(c *luau.State, fn string, index int) (string, error) {
 	return text, nil
 }
 
-func onSignal(enqueue func(luau.Ref), meta luau.Ref) luau.Func {
+func onSignal(ctx context.Context, enqueue func(luau.Ref), meta luau.Ref) luau.Func {
 	return func(c *luau.State) (int, error) {
 		if enqueue == nil {
 			return 0, errors.New("process.onSignal: signal callback dispatcher is unavailable")
@@ -333,6 +372,9 @@ func onSignal(enqueue func(luau.Ref), meta luau.Ref) luau.Func {
 			go func() {
 				for {
 					select {
+					case <-ctx.Done():
+						handle.close()
+						return
 					case <-handle.stop:
 						return
 					case _, ok := <-handle.signals:
@@ -402,7 +444,7 @@ func closeSignal(c *luau.State) (int, error) {
 	return 0, nil
 }
 
-func pushResult(c *luau.State, result processResult) error {
+func pushResult(c interface{ Push(any) error }, result processResult) error {
 	return c.Push(map[string]any{
 		"stdout":   result.stdout,
 		"stderr":   result.stderr,
@@ -422,11 +464,11 @@ type processResult struct {
 	timedOut bool
 }
 
-func execute(program string, args []string, options runOptions) (processResult, error) {
-	ctx := context.Background()
+func execute(parent context.Context, program string, args []string, options runOptions) (processResult, error) {
+	ctx := parent
 	cancel := func() {}
 	if options.timeoutSet {
-		ctx, cancel = context.WithTimeout(ctx, options.timeout)
+		ctx, cancel = context.WithTimeout(parent, options.timeout)
 	}
 	defer cancel()
 
@@ -453,6 +495,9 @@ func execute(program string, args []string, options runOptions) (processResult, 
 	}
 
 	err := cmd.Run()
+	if parent.Err() != nil {
+		return processResult{}, luau.ErrInterrupted
+	}
 	result := processResult{
 		stdout:   stdout.String(),
 		stderr:   stderr.String(),

@@ -3,6 +3,7 @@ package task
 
 import (
 	"container/heap"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -16,6 +17,8 @@ import (
 type Options struct {
 	OnError    func(error)
 	BeforeIdle func()
+	// Context is inherited by tasks and defaults to context.Background.
+	Context context.Context
 }
 
 type Scheduler struct {
@@ -50,10 +53,12 @@ type task struct {
 	yieldedAt     time.Time
 	yieldedValues int
 	waitScheduled bool
+	suspended     bool
 	seq           uint64
 	moduleResume  bool
 	moduleErr     error
 	moduleFailed  bool
+	resumeErr     error
 	start         func(*luau.Thread) (int, error)
 	done          func(*luau.Thread, error)
 	pooled        bool
@@ -61,13 +66,17 @@ type task struct {
 }
 
 type taskControl struct {
+	mu        sync.Mutex
 	cancelled bool
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 type command struct {
 	callback    luau.Ref
 	hasCallback bool
 	submit      *submission
+	resume      *task
 	post        func()
 }
 
@@ -119,6 +128,60 @@ func (s *Scheduler) Submit(state *luau.State, start func(*luau.Thread) (int, err
 	return s.enqueue(command{submit: &submission{state: state, start: start, done: done}})
 }
 
+// Await suspends the current Luau task until work completes, then resumes it
+// with the supplied start function or error. work must start the operation
+// asynchronously and call resume once it completes.
+func (s *Scheduler) Await(c *luau.State, work func(context.Context, func(func(*luau.Thread) (int, error), error))) (int, error) {
+	current := s.current
+	if current == nil {
+		return 0, errors.New("task scheduler: cannot await outside a running task")
+	}
+	if current.control == nil {
+		current.control = s.newTaskControl()
+	}
+	th, err := c.Thread()
+	if err != nil {
+		return 0, err
+	}
+	if err := c.Push(s.nonce); err != nil {
+		th.Close()
+		return 0, err
+	}
+	if err := c.Push(0.0); err != nil {
+		th.Close()
+		return 0, err
+	}
+	if err := s.Hold(); err != nil {
+		th.Close()
+		return 0, err
+	}
+
+	continuation := &task{
+		th:      th,
+		control: current.control,
+		isMain:  current.isMain,
+		done:    current.done,
+	}
+	current.done = nil
+	current.waitScheduled = true
+
+	var once sync.Once
+	resume := func(start func(*luau.Thread) (int, error), resumeErr error) {
+		once.Do(func() {
+			continuation.start = start
+			continuation.resumeErr = resumeErr
+			if err := s.enqueue(command{resume: continuation}); err != nil {
+				continuation.th.Close()
+			}
+			if err := s.Release(); err != nil {
+				s.report(err)
+			}
+		})
+	}
+	work(current.control.context(), resume)
+	return c.Yield(2)
+}
+
 func (s *Scheduler) Hold() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -162,7 +225,47 @@ func (s *Scheduler) signal() {
 }
 
 func (s *Scheduler) Start(th *luau.Thread, nargs int) {
-	s.schedule(&task{th: th, control: &taskControl{}, isMain: true, nargs: nargs}, time.Time{})
+	s.schedule(&task{th: th, control: s.newTaskControl(), isMain: true, nargs: nargs}, time.Time{})
+}
+
+func (s *Scheduler) newTaskControl() *taskControl {
+	parent := s.opts.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	return &taskControl{ctx: ctx, cancel: cancel}
+}
+
+func (c *taskControl) isCancelled() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cancelled
+}
+
+func (c *taskControl) stop() {
+	c.mu.Lock()
+	c.cancelled = true
+	cancel := c.cancel
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (c *taskControl) close() {
+	c.mu.Lock()
+	cancel := c.cancel
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (c *taskControl) context() context.Context {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ctx
 }
 
 func (s *Scheduler) Module() map[string]luau.Func {
@@ -270,7 +373,7 @@ func (s *Scheduler) cancel(c *luau.State) (int, error) {
 	if !ok || !isTask {
 		return 0, errors.New("task.cancel: expected a thread")
 	}
-	control.cancelled = true
+	control.stop()
 	return 0, nil
 }
 
@@ -293,7 +396,7 @@ func (s *Scheduler) delay(c *luau.State) (int, error) {
 }
 
 func (s *Scheduler) scheduleTask(c *luau.State, functionIndex int, wake time.Time) (int, error) {
-	t, err := newTask(c, functionIndex)
+	t, err := newTask(c, functionIndex, s.newTaskControl())
 	if err != nil {
 		return 0, err
 	}
@@ -305,7 +408,7 @@ func (s *Scheduler) scheduleTask(c *luau.State, functionIndex int, wake time.Tim
 	return 1, nil
 }
 
-func newTask(c *luau.State, functionIndex int) (*task, error) {
+func newTask(c *luau.State, functionIndex int, control *taskControl) (*task, error) {
 	th, err := c.NewThread()
 	if err != nil {
 		return nil, err
@@ -325,7 +428,7 @@ func newTask(c *luau.State, functionIndex int) (*task, error) {
 	}
 	return &task{
 		th:      th,
-		control: &taskControl{},
+		control: control,
 		nargs:   c.Top() - functionIndex,
 	}, nil
 }
@@ -350,7 +453,7 @@ func (s *Scheduler) Run() bool {
 
 		case len(s.q) > 0:
 			t = heap.Pop(&s.q).(*task)
-			if t.control != nil && t.control.cancelled {
+			if t.control != nil && t.control.isCancelled() {
 				s.finishTask(t, errors.New("task cancelled"))
 				continue
 			}
@@ -388,12 +491,12 @@ func (s *Scheduler) Run() bool {
 			continue
 		}
 
-		if t.control != nil && t.control.cancelled {
+		if t.control != nil && t.control.isCancelled() {
 			s.finishTask(t, errors.New("task cancelled"))
 			continue
 		}
 		finished, err := s.step(t)
-		if t.control != nil && t.control.cancelled {
+		if t.control != nil && t.control.isCancelled() {
 			finished = true
 		}
 		if err != nil && t.moduleFailed {
@@ -435,6 +538,8 @@ func (s *Scheduler) processCommands() {
 				c.post()
 			case c.submit != nil:
 				s.scheduleSubmission(c.submit)
+			case c.resume != nil:
+				s.schedule(c.resume, time.Time{})
 			case c.hasCallback:
 				s.scheduleCallback(c.callback)
 			}
@@ -496,6 +601,9 @@ func (s *Scheduler) finishTask(t *task, err error) {
 	if t.done != nil {
 		t.done(t.th, err)
 	}
+	if !t.suspended && t.control != nil {
+		t.control.close()
+	}
 	if t.pooled && t.completed && err == nil && len(s.idle) < maxIdleThreads && t.th.Reset() == nil {
 		s.idle = append(s.idle, t.th)
 		return
@@ -545,6 +653,11 @@ func (s *Scheduler) step(t *task) (finished bool, err error) {
 			n, done, err = t.th.ResumeN(1)
 		}
 		s.current = nil
+	} else if t.resumeErr != nil {
+		s.current = t
+		n, done, err = t.th.ResumeError(t.resumeErr)
+		s.current = nil
+		t.resumeErr = nil
 	} else {
 		if t.started {
 			if t.yieldedValues > 0 {
@@ -587,6 +700,7 @@ func (s *Scheduler) step(t *task) (finished bool, err error) {
 	if t.waitScheduled {
 		t.waitScheduled = false
 		t.pooled = false
+		t.suspended = true
 		return true, nil
 	}
 	t.yieldedAt = time.Now()

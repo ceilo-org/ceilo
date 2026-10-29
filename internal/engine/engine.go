@@ -48,6 +48,9 @@ func RunFile(ctx context.Context, opts Options) error {
 		return 1
 	}
 	report := func(err error) {
+		if ctx.Err() != nil {
+			return
+		}
 		var le *luau.Error
 		if errors.As(err, &le) {
 			fail("%s\n%s", le.Error(), le.Traceback)
@@ -68,8 +71,10 @@ func RunFile(ctx context.Context, opts Options) error {
 	}
 
 	defer L.Close()
+	stopWatching := L.WatchContext(ctx)
+	defer stopWatching()
 
-	newTask := stdtask.New(stdtask.Options{OnError: report, BeforeIdle: func() { out.Flush() }})
+	newTask := stdtask.New(stdtask.Options{OnError: report, BeforeIdle: func() { out.Flush() }, Context: ctx})
 	newTask.BindState(L)
 
 	disk, err := NewDiskRequirer(newTask.ModuleFinished)
@@ -85,7 +90,7 @@ func RunFile(ctx context.Context, opts Options) error {
 	clientModule := ceilonet.ClientModule(ctx)
 	modules := map[string]map[string]luau.Func{
 		LibPrefix + "task": newTask.Module(),
-		LibPrefix + "fs":   stdfs.Module(),
+		LibPrefix + "fs":   stdfs.ModuleWithContext(ctx, newTask),
 		LibPrefix + "io":   stdio.Module(),
 		LibPrefix + "json": stdjson.Module(),
 
@@ -104,7 +109,7 @@ func RunFile(ctx context.Context, opts Options) error {
 	if err := registerCallableModule(L, CeiloPrefix+"net/server", "server", serverModule["server"]); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
-	if err := stdprocess.Register(L, LibPrefix+"process", opts.Args, newTask.QueueCallback); err != nil {
+	if err := stdprocess.RegisterWithContext(ctx, newTask, L, LibPrefix+"process", opts.Args, newTask.QueueCallback); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
 	if err := stdtime.RegisterModules(L, LibPrefix+"time"); err != nil {
@@ -137,6 +142,9 @@ func RunFile(ctx context.Context, opts Options) error {
 
 	newTask.Start(th, len(opts.Args))
 	if !newTask.Run() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		os.Exit(1)
 	}
 

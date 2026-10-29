@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Leoj030/go-luau/luau"
+	stdtask "github.com/ceilo-org/ceilo/internal/stdlib/task"
 )
 
 func TestModeToFlags(t *testing.T) {
@@ -150,31 +152,63 @@ func TestWatchCallsBackUntilStopped(t *testing.T) {
 	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@std/fs", Module()); err != nil {
+	scheduler := stdtask.New(stdtask.Options{OnError: func(err error) {
+		t.Errorf("watch callback: %v", err)
+	}})
+	scheduler.BindState(state)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := state.RegisterModule("@std/fs", ModuleWithContext(ctx, scheduler)); err != nil {
 		t.Fatal(err)
 	}
 
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 		_ = os.WriteFile(filepath.Join(dir, "event.txt"), []byte("event"), 0o644)
 	}()
 
 	script := fmt.Sprintf(`
 		local fs = require("@std/fs")
-		local called = false
-		fs.watch(%s, function(event)
-			assert(event.name ~= nil and event.name ~= "")
-			assert(event.op ~= nil and event.op ~= "")
-			called = true
-			return false
+		local watcher
+		watcher = fs.watch(%s, function(filename, event)
+			assert(type(filename) == "string")
+			assert(filename == %s)
+			assert(type(event) == "table")
+			assert(event.change == true)
+			watchCalled = true
+			watcher:close()
 		end)
-		watchCalled = called
-	`, luaString(dir))
-	if err := state.DoString(script); err != nil {
+		watchReturnedHandle = type(watcher.close) == "function"
+	`, luaString(dir), luaString(filepath.Join(dir, "event.txt")))
+	bytecode, err := luau.Compile(script)
+	if err != nil {
 		t.Fatal(err)
+	}
+	thread, err := state.NewThread()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer thread.Close()
+	if err := thread.Load(bytecode, "=fs-watch-test"); err != nil {
+		t.Fatal(err)
+	}
+	scheduler.Start(thread, 0)
+	done := make(chan bool, 1)
+	go func() { done <- scheduler.Run() }()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("scheduler reported failure")
+		}
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("watch callback was not delivered and closed")
 	}
 	if got, err := state.GetGlobal("watchCalled"); err != nil || got != true {
 		t.Errorf("watchCalled = %v, %v; want true", got, err)
+	}
+	if got, err := state.GetGlobal("watchReturnedHandle"); err != nil || got != true {
+		t.Errorf("watchReturnedHandle = %v, %v; want true", got, err)
 	}
 }
 

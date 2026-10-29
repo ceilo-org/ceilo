@@ -55,6 +55,7 @@ export type WatchHandle = {
 export type WatchEvent = {
 	change: boolean,
 	rename: boolean,
+	error: string?,
 }
 
 --- Opens the file at `path` in the given `mode` (defaults to `"r"`). Returns a file handle.

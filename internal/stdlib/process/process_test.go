@@ -3,6 +3,7 @@
 package process
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -15,6 +16,10 @@ import (
 )
 
 func newTestRuntime(t *testing.T, args []string) (*luau.State, *stdtask.Scheduler) {
+	return newTestRuntimeWithContext(t, context.Background(), args)
+}
+
+func newTestRuntimeWithContext(t *testing.T, ctx context.Context, args []string) (*luau.State, *stdtask.Scheduler) {
 	t.Helper()
 	state, err := luau.NewState()
 	if err != nil {
@@ -24,18 +29,31 @@ func newTestRuntime(t *testing.T, args []string) (*luau.State, *stdtask.Schedule
 	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	scheduler := stdtask.New(stdtask.Options{OnError: func(err error) { t.Errorf("scheduled callback: %v", err) }})
+	scheduler := stdtask.New(stdtask.Options{Context: ctx, OnError: func(err error) {
+		if ctx.Err() != nil {
+			return
+		}
+		t.Errorf("scheduled callback: %v", err)
+	}})
 	scheduler.BindState(state)
 	if err := state.RegisterModule("@std/task", scheduler.Module()); err != nil {
 		t.Fatal(err)
 	}
-	if err := Register(state, "@std/process", args, scheduler.QueueCallback); err != nil {
+	if err := RegisterWithContext(ctx, scheduler, state, "@std/process", args, scheduler.QueueCallback); err != nil {
 		t.Fatal(err)
 	}
 	return state, scheduler
 }
 
 func runScript(t *testing.T, state *luau.State, scheduler *stdtask.Scheduler, source string) {
+	t.Helper()
+	done := startScript(t, state, scheduler, source)
+	if !<-done {
+		t.Fatal("scheduler reported failure")
+	}
+}
+
+func startScript(t *testing.T, state *luau.State, scheduler *stdtask.Scheduler, source string) <-chan bool {
 	t.Helper()
 	bytecode, err := luau.Compile(source)
 	if err != nil {
@@ -50,9 +68,9 @@ func runScript(t *testing.T, state *luau.State, scheduler *stdtask.Scheduler, so
 		t.Fatal(err)
 	}
 	scheduler.Start(thread, 0)
-	if !scheduler.Run() {
-		t.Fatal("scheduler reported failure")
-	}
+	done := make(chan bool, 1)
+	go func() { done <- scheduler.Run() }()
+	return done
 }
 
 func TestProcessModuleRunAndOptions(t *testing.T) {
@@ -75,6 +93,10 @@ func TestProcessModuleRunAndOptions(t *testing.T) {
 		assert(result.signal == nil and result.timedOut == false)
 		local noTimeout = process.run({"/bin/sh", "-c", "printf ok"}, {timeout = nil, env = nil})
 		assert(noTimeout.ok and noTimeout.stdout == "ok")
+		local commandOk = pcall(function()
+			process.run({"/ceilo/test/missing-command"})
+		end)
+		assert(commandOk == false)
 
 		local discarded = process.run({"/bin/sh", "-c", "printf hidden; printf hidden >&2"}, {stdio = "none"})
 		assert(discarded.ok and discarded.stdout == "" and discarded.stderr == "")
@@ -105,6 +127,65 @@ func TestProcessRunTimeoutKillsProcessGroup(t *testing.T) {
 		assert(result.ok == false)
 		assert(result.signal == "SIGKILL", tostring(result.signal) .. ":" .. tostring(result.exitcode) .. ":" .. tostring(result.timedOut))
 	`)
+}
+
+func TestProcessRunAndSystemStopOnContextCancellation(t *testing.T) {
+	tests := map[string]string{
+		"run":    `process.run({"/bin/sh", "-c", "sleep 10"})`,
+		"system": `process.system("sleep 10", {system = "/bin/sh"})`,
+	}
+	for name, call := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			state, scheduler := newTestRuntimeWithContext(t, ctx, nil)
+			done := startScript(t, state, scheduler, `
+				local process = require("@std/process")
+				`+call+`
+			`)
+
+			timer := time.AfterFunc(50*time.Millisecond, cancel)
+			defer timer.Stop()
+			select {
+			case ok := <-done:
+				if ok {
+					t.Fatal("scheduler succeeded after process cancellation")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("process call did not stop after context cancellation")
+			}
+		})
+	}
+}
+
+func TestTaskCancelStopsProcessRunInsideSpawnedTask(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	state, scheduler := newTestRuntimeWithContext(t, ctx, nil)
+	done := startScript(t, state, scheduler, `
+		local process = require("@std/process")
+		local task = require("@std/task")
+		local handle = task.spawn(function()
+			process.run({"/bin/sh", "-c", "sleep 10"})
+			childFinished = true
+		end)
+		task.delay(0.05, function()
+			task.cancel(handle)
+			cancelled = true
+		end)
+		task.wait(0.1)
+		assert(cancelled == true)
+		assert(childFinished == nil)
+	`)
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("scheduler reported failure")
+		}
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("task.cancel did not stop the subprocess task")
+	}
 }
 
 func TestProcessOnSignalQueuesCallbackOnScheduler(t *testing.T) {

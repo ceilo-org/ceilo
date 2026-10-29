@@ -1,27 +1,35 @@
 // Package fs is the Go side of the "@std/fs" library: reading, writing
 // and inspecting files and directories.
 //
-// Every function is synchronous: it blocks the whole runtime, including
-// other tasks, until the operation finishes. Relative paths are relative to
-// the process's working directory. Errors are raised as Luau errors, so
-// scripts handle them with pcall.
+// Filesystem operations are synchronous except watch, which dispatches events
+// asynchronously. Relative paths are relative to the process's working
+// directory. Errors are raised as Luau errors, so scripts handle them with pcall.
 package fs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/Leoj030/go-luau/luau"
+	stdtask "github.com/ceilo-org/ceilo/internal/stdlib/task"
 )
 
 // Module returns the functions of the library, ready for
 // luau.State.RegisterModule.
 func Module() map[string]luau.Func {
+	return ModuleWithContext(context.Background(), nil)
+}
+
+// ModuleWithContext returns the functions of the library. It uses ctx to stop
+// watchers and scheduler to dispatch callbacks and keep the runtime alive.
+func ModuleWithContext(ctx context.Context, scheduler *stdtask.Scheduler) map[string]luau.Func {
 	return map[string]luau.Func{
 		"readFile":        readfile,
 		"writeFile":       writefile,
@@ -42,7 +50,7 @@ func Module() map[string]luau.Func {
 		"link":            link,
 		"symbolicLink":    symbolicLink,
 		"walk":            walk,
-		"watch":           watch,
+		"watch":           watchWithContext(ctx, scheduler),
 	}
 }
 
@@ -570,62 +578,187 @@ func walk(c *luau.State) (int, error) {
 }
 
 type WatchEvent struct {
-	Name  string `luau:"name"`
-	Op    string `luau:"op"`
-	Error string `luau:"error,omitempty"`
+	Change bool   `luau:"change"`
+	Rename bool   `luau:"rename"`
+	Error  string `luau:"error,omitempty"`
 }
 
-func watch(c *luau.State) (n int, retErr error) {
-	path, err := getArg[string](c, "watch", 1)
-	if err != nil {
-		return 0, err
-	}
-	if c.TypeName(2) != "function" {
-		return 0, errors.New("fs.watch: argument 2 must be a function")
-	}
-	callback, err := c.Ref(2)
-	if err != nil {
-		return 0, err
-	}
-	defer c.Unref(callback)
+type watchHandle struct {
+	watcher *fsnotify.Watcher
+	stop    chan struct{}
+	once    sync.Once
+	err     error
+}
 
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return 0, wrapErr("watch", err)
+func (h *watchHandle) close() error {
+	h.once.Do(func() {
+		close(h.stop)
+		h.err = h.watcher.Close()
+	})
+	return h.err
+}
+
+type watchCallbackState struct {
+	mu       sync.Mutex
+	state    *luau.State
+	ref      luau.Ref
+	pending  int
+	stopped  bool
+	released bool
+	post     func(func()) error
+}
+
+func (s *watchCallbackState) schedule(scheduler *stdtask.Scheduler, filename string, event WatchEvent) error {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return nil
 	}
-	defer func() {
-		if err := watcher.Close(); err != nil {
-			retErr = errors.Join(retErr, wrapErr("watch", err))
-		}
-	}()
-	if err := watcher.Add(path); err != nil {
-		return 0, wrapErr("watch", err)
-	}
-	for {
-		var event WatchEvent
-		select {
-		case e, ok := <-watcher.Events:
-			if !ok {
-				return 0, errors.New("fs.watch: watcher event stream closed")
-			}
-			event = WatchEvent{Name: e.Name, Op: e.Op.String()}
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				return 0, errors.New("fs.watch: watcher error stream closed")
-			}
-			event = WatchEvent{Error: err.Error()}
-		}
-		if err := c.PushRef(callback); err != nil {
+	s.pending++
+	ref := s.ref
+	s.mu.Unlock()
+
+	err := scheduler.Submit(s.state, func(th *luau.Thread) (int, error) {
+		if err := th.PushRef(ref); err != nil {
 			return 0, err
 		}
-		results, err := c.Call(event)
+		if err := th.Push(filename); err != nil {
+			return 0, err
+		}
+		if err := th.Push(event); err != nil {
+			return 0, err
+		}
+		return 2, nil
+	}, func(*luau.Thread, error) {
+		s.completed()
+	})
+	if err != nil {
+		s.mu.Lock()
+		s.pending--
+		s.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (s *watchCallbackState) stop() {
+	s.mu.Lock()
+	s.stopped = true
+	s.mu.Unlock()
+	_ = s.post(s.releaseIfDone)
+}
+
+func (s *watchCallbackState) completed() {
+	s.mu.Lock()
+	s.pending--
+	release := s.stopped && s.pending == 0
+	s.mu.Unlock()
+	if release {
+		s.releaseIfDone()
+	}
+}
+
+func (s *watchCallbackState) releaseIfDone() {
+	s.mu.Lock()
+	if !s.stopped || s.pending != 0 || s.released {
+		s.mu.Unlock()
+		return
+	}
+	s.released = true
+	ref := s.ref
+	s.mu.Unlock()
+	s.state.Unref(ref)
+}
+
+func watchWithContext(ctx context.Context, scheduler *stdtask.Scheduler) luau.Func {
+	return func(c *luau.State) (int, error) {
+		if scheduler == nil {
+			return 0, errors.New("fs.watch: runtime scheduler is unavailable")
+		}
+		path, err := getArg[string](c, "watch", 1)
 		if err != nil {
+			return 0, err
+		}
+		if c.TypeName(2) != "function" {
+			return 0, errors.New("fs.watch: argument 2 must be a function")
+		}
+		callback, err := c.Ref(2)
+		if err != nil {
+			return 0, err
+		}
+
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			c.Unref(callback)
 			return 0, wrapErr("watch", err)
 		}
-		if len(results) > 0 {
-			if keepWatching, ok := results[0].(bool); ok && !keepWatching {
-				return 0, nil
-			}
+		if err := watcher.Add(path); err != nil {
+			_ = watcher.Close()
+			c.Unref(callback)
+			return 0, wrapErr("watch", err)
 		}
+		if err := scheduler.Hold(); err != nil {
+			_ = watcher.Close()
+			c.Unref(callback)
+			return 0, err
+		}
+		handle := &watchHandle{watcher: watcher, stop: make(chan struct{})}
+		callbackState := &watchCallbackState{
+			state: c,
+			ref:   callback,
+			post:  scheduler.Post,
+		}
+		if err := c.NewTable(0, 1); err != nil {
+			_ = handle.close()
+			c.Unref(callback)
+			_ = scheduler.Release()
+			return 0, err
+		}
+		if err := c.PushFunction("close", func(*luau.State) (int, error) {
+			return 0, handle.close()
+		}); err != nil {
+			_ = handle.close()
+			c.Unref(callback)
+			_ = scheduler.Release()
+			return 0, err
+		}
+		if err := c.SetField(-2, "close"); err != nil {
+			_ = handle.close()
+			c.Unref(callback)
+			_ = scheduler.Release()
+			return 0, err
+		}
+		go func() {
+			defer scheduler.Release()
+			defer callbackState.stop()
+			defer handle.close()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-handle.stop:
+					return
+				case e, ok := <-watcher.Events:
+					if !ok {
+						return
+					}
+					event := WatchEvent{
+						Change: e.Op&(fsnotify.Create|fsnotify.Write) != 0,
+						Rename: e.Op&(fsnotify.Remove|fsnotify.Rename) != 0,
+					}
+					if err := callbackState.schedule(scheduler, e.Name, event); err != nil {
+						return
+					}
+				case watchErr, ok := <-watcher.Errors:
+					if !ok {
+						return
+					}
+					if err := callbackState.schedule(scheduler, "", WatchEvent{Error: watchErr.Error()}); err != nil {
+						return
+					}
+				}
+			}
+		}()
+		return 1, nil
 	}
 }

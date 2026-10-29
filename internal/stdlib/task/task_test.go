@@ -91,6 +91,26 @@ func TestTaskWaitResumesRegularAndSpawnedTasks(t *testing.T) {
 	}
 }
 
+func TestTaskWaitResumesAfterSpawn(t *testing.T) {
+	L, ok := runWithYieldingModule(
+		t,
+		`local task = require("@std/task")
+		task.spawn(function() spawned = true end)
+		task.wait(0.001)
+		resumed = true`,
+		`return true`,
+		func(err error) { t.Errorf("unexpected task error: %v", err) },
+	)
+	if !ok {
+		t.Fatal("scheduler reported failure")
+	}
+	for name := range map[string]bool{"resumed": true, "spawned": true} {
+		if got, err := L.GetGlobal(name); err != nil || got != true {
+			t.Errorf("%s = %v, %v; want true", name, got, err)
+		}
+	}
+}
+
 func TestTaskDeferRunsAtNextSchedulerOpportunityWithArguments(t *testing.T) {
 	L, ok := runWithYieldingModule(
 		t,
