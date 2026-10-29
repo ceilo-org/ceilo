@@ -2,6 +2,7 @@ package net
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"net"
 	"strings"
@@ -100,4 +101,14 @@ func TestWriteResponse(t *testing.T) {
 			t.Errorf("response %q does not contain %q", responseText, want)
 		}
 	}
+}
+
+func FuzzReadRequest(t *testing.F) {
+	t.Add([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n"))
+	t.Add([]byte("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\nabc"))
+	t.Add([]byte("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n"))
+	t.Fuzz(func(t *testing.T, data []byte) {
+		r := bufio.NewReader(bytes.NewReader(data))
+		_, _, _, _ = readRequestLimit(r, 1<<20)
+	})
 }

@@ -6,8 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -335,17 +333,6 @@ func newTask(c *luau.State, functionIndex int) (*task, error) {
 func (s *Scheduler) Run() bool {
 	defer s.finish()
 
-	stats := os.Getenv("CEILO_SCHED_STATS") != ""
-	var idle time.Duration
-	if stats {
-		began := time.Now()
-		defer func() {
-			total := time.Since(began)
-			fmt.Fprintf(os.Stderr, "scheduler: busy %.0f%% of %v\n",
-				100*(1-idle.Seconds()/total.Seconds()), total.Round(time.Millisecond))
-		}()
-	}
-
 	for {
 		s.processCommands()
 
@@ -397,14 +384,7 @@ func (s *Scheduler) Run() bool {
 			if s.opts.BeforeIdle != nil {
 				s.opts.BeforeIdle()
 			}
-			var slept time.Time
-			if stats {
-				slept = time.Now()
-			}
 			<-s.wake
-			if stats {
-				idle += time.Since(slept)
-			}
 			continue
 		}
 
