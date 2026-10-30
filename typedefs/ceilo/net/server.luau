@@ -34,7 +34,7 @@ export type Configuration = {
 	tls: TLSConfiguration?,
 	handler: Handler?,
 }
-
+--- Creates and starts a server using the provided configuration.
 local function server(configuration: Configuration): Server
 	error("not implemented")
 end

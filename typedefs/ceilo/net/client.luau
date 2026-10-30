@@ -16,7 +16,7 @@ export type Client = {
 }
 
 local client = {}
-
+--- Sends an HTTP request to the URL and returns the server's response.
 function client.request(url: string, metadata: Metadata?): NetResponse
 	error("not implemented")
 end

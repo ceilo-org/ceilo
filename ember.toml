@@ -1,2 +1,4 @@
 [tools]
 stylua = "JohnnyMorganz/StyLua@2.6.0"
+lute = "luau-lang/lute@1.0.1-nightly.20261030"
+ceilo = "ceilo-org/ceilo@0.1.0-dev.3"
