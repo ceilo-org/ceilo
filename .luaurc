@@ -1,7 +1,10 @@
 {
-    "languageMode": "strict", 
+    "languageMode": "strict",
     "aliases": {
         "std": "./typedefs/std", 
         "ceilo": "./typedefs/ceilo"
-    }
+    },
+    "globals":[
+        "warn"
+    ]
 }
