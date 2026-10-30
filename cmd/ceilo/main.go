@@ -1,4 +1,4 @@
-// Command ceilo is a Luau runtime.
+// Ceilo - A Luau runtime.
 package main
 
 import (
@@ -9,8 +9,6 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"syscall"
-	//"runtime"
-	//"time"
 
 	"github.com/ceilo-org/ceilo/internal/cli"
 )
@@ -24,16 +22,6 @@ import (
 var version = "dev"
 
 func main() {
-
-	// go func() {
-	// 	var last int64
-	// 	for range time.Tick(5 * time.Second) {
-	// 		n := runtime.NumCgoCall()
-	// 		fmt.Printf("cgo calls in last 5s: %d\n", n-last)
-	// 		last = n
-	// 	}
-	// }()
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := cli.Run(ctx, cli.Env{
 		Name:    "ceilo",
@@ -45,7 +33,7 @@ func main() {
 	if err := writeInterruptNewline(ctx, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "ceilo: write newline: %v\n", err)
 	}
-	stop() // os.Exit doesn't run deferred calls
+	stop()
 	os.Exit(code)
 }
 

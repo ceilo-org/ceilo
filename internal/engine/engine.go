@@ -4,6 +4,7 @@ package engine
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -23,7 +24,6 @@ import (
 	stdtime "github.com/ceilo-org/ceilo/internal/stdlib/time"
 )
 
-// Options says what to run and with what limits.
 type Options struct {
 	Script    string
 	Args      []string
@@ -37,8 +37,10 @@ type Options struct {
 var LibPrefix = "@std/"
 var CeiloPrefix = "@ceilo/"
 
-// RunFile runs a script file. This is a placeholder: it only reads the file
-// and says what it would do. The next step replaces it with the real runtime.
+//go:embed prelude.luau
+var prelude string
+
+// RunFile runs a script file.
 func RunFile(ctx context.Context, opts Options) error {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
@@ -115,6 +117,18 @@ func RunFile(ctx context.Context, opts Options) error {
 	if err := stdtime.RegisterModules(L, LibPrefix+"time"); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
+
+	pre, err := luau.Compile(prelude)
+	if err == nil {
+		err = L.Load(pre, "=prelude")
+	}
+	if err == nil {
+		_, err = L.Call()
+	}
+	if err != nil {
+		return fmt.Errorf("error: %v", err)
+	}
+
 	bc, err := luau.Compile(string(src))
 
 	if err != nil {

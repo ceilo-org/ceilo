@@ -22,7 +22,6 @@ type Env struct {
 	Stderr  io.Writer
 }
 
-// A Command is one subcommand, such as "run".
 type Command interface {
 	Name() string
 	Synopsis() string // one line for the command list
@@ -87,7 +86,6 @@ func (a *App) dispatch(ctx context.Context, args []string) error {
 
 	cmd := a.lookup(name)
 	if cmd == nil {
-		// "luaurt script.luau" is short for "luaurt run script.luau".
 		run := a.lookup("run")
 		if run == nil || !looksLikeScript(name) {
 			return usageErrorf("", "unknown command %q", name)
@@ -96,7 +94,7 @@ func (a *App) dispatch(ctx context.Context, args []string) error {
 	}
 
 	fs := flag.NewFlagSet(cmd.Name(), flag.ContinueOnError)
-	fs.SetOutput(io.Discard) // we print our own messages
+	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
 	cmd.SetFlags(fs)
 	if err := fs.Parse(rest); err != nil {
@@ -149,7 +147,7 @@ func (a *App) exitCode(err error) int {
 	}
 
 	if errors.Is(err, context.Canceled) {
-		return 130 // the usual code for "stopped by Ctrl-C"
+		return 130
 	}
 
 	fmt.Fprintf(a.env.Stderr, "%s: %v\n", a.env.Name, err)
@@ -157,7 +155,7 @@ func (a *App) exitCode(err error) int {
 }
 
 func (a *App) printHelp(w io.Writer) {
-	fmt.Fprintf(w, "%[1]s is a Luau runtime.\n\nUsage:\n  %[1]s <command> [flags] [arguments]\n  %[1]s <script.luau> [arguments]\n\nCommands:\n", a.env.Name)
+	fmt.Fprintf(w, "%[1]s - A Luau runtime.\n\nUsage:\n  %[1]s <command> [flags] [arguments]\n  %[1]s <script.luau> [arguments]\n\nCommands:\n", a.env.Name)
 
 	cmds := append([]Command(nil), a.commands...)
 	sort.Slice(cmds, func(i, j int) bool { return cmds[i].Name() < cmds[j].Name() })
