@@ -28,14 +28,6 @@ type clientModule struct {
 	ctx context.Context
 }
 
-func ClientModule(ctx context.Context) map[string]luau.Func {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	client := &clientModule{ctx: ctx}
-	return map[string]luau.Func{"request": client.request}
-}
-
 func (m *clientModule) request(c *luau.State) (int, error) {
 	urlArg, metadataArg := 1, 2
 	if c.TypeName(1) == "table" {

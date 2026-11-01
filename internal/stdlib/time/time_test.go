@@ -5,20 +5,29 @@ import (
 	"testing/fstest"
 
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/Leoj030/go-luau/vm"
 )
 
+func registerTimeModules(t *testing.T, v *vm.VM) {
+	t.Helper()
+	if err := v.Module("@std/time", Module(v)); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Module("@std/time/duration", DurationModule()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTimeAndDurationModules(t *testing.T) {
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterModules(state, "@std/time"); err != nil {
-		t.Fatal(err)
-	}
+	registerTimeModules(t, v)
 
 	script := `
 		local time = require("@std/time")
@@ -55,30 +64,28 @@ func TestTimeAndDurationModules(t *testing.T) {
 		assert(getmetatable(first) == "The metatable is locked!")
 		assert(getmetatable(oneSecond) == "The metatable is locked!")
 	`
-	if err := state.DoString(script); err != nil {
+	if err := v.Do(script); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestDurationRejectsInvalidOperations(t *testing.T) {
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterModules(state, "@std/time"); err != nil {
-		t.Fatal(err)
-	}
+	registerTimeModules(t, v)
 
 	for _, script := range []string{
 		`require("@std/time").duration.seconds(0 / 0)`,
 		`require("@std/time/duration").seconds(1) / 0`,
 		`require("@std/time").duration.seconds(1) + 1`,
 	} {
-		if err := state.DoString(script); err == nil {
+		if err := v.Do(script); err == nil {
 			t.Errorf("DoString(%q) succeeded, want an error", script)
 		}
 	}

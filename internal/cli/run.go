@@ -42,5 +42,12 @@ func (c *runCmd) Execute(ctx context.Context, env Env, args []string) error {
 		Stdin:     env.Stdin,
 		Stdout:    env.Stdout,
 		Stderr:    env.Stderr,
+		Runtime: struct {
+			Name    string
+			Version string
+		}{
+			Name:    env.Name,
+			Version: env.Version,
+		},
 	})
 }
