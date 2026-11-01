@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"time"
 
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/Leoj030/go-luau/vm"
 
 	ceilobcrypt "github.com/ceilo-org/ceilo/internal/ceilolib/bcrypt"
 	ceilonet "github.com/ceilo-org/ceilo/internal/ceilolib/net"
@@ -32,6 +34,10 @@ type Options struct {
 	Stdin     io.Reader
 	Stdout    io.Writer
 	Stderr    io.Writer
+	Runtime   struct {
+		Name    string
+		Version string
+	}
 }
 
 var LibPrefix = "@std/"
@@ -53,8 +59,7 @@ func RunFile(ctx context.Context, opts Options) error {
 		if ctx.Err() != nil {
 			return
 		}
-		var le *luau.Error
-		if errors.As(err, &le) {
+		if le, ok := errors.AsType[*luau.Error](err); ok {
 			fail("%s\n%s", le.Error(), le.Traceback)
 		} else {
 			fail("error: %v", err)
@@ -66,13 +71,21 @@ func RunFile(ctx context.Context, opts Options) error {
 		return fmt.Errorf("cannot read script: %w", err)
 	}
 
-	L, err := luau.NewState()
-
+	var vmOptions []vm.Option
+	if opts.MemoryMiB > 0 {
+		maxInt := int(^uint(0) >> 1)
+		if opts.MemoryMiB > maxInt/(1<<20) {
+			return fmt.Errorf("error: memory limit too large")
+		}
+		vmOptions = append(vmOptions, vm.WithMemoryLimit(opts.MemoryMiB<<20))
+	}
+	machine, err := vm.New(vmOptions...)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("error: %w", err)
 	}
 
-	defer L.Close()
+	defer machine.Close()
+	L := machine.State()
 	stopWatching := L.WatchContext(ctx)
 	defer stopWatching()
 
@@ -84,48 +97,47 @@ func RunFile(ctx context.Context, opts Options) error {
 		return fmt.Errorf("error: %v", err)
 	}
 
-	if err := L.OpenRequire(disk); err != nil {
+	if err := machine.EnableRequireWith(disk); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
 
 	serverModule := ceilonet.ServerModule(ctx, newTask, L, report)
 	clientModule := ceilonet.ClientModule(ctx)
-	modules := map[string]map[string]luau.Func{
-		LibPrefix + "task": newTask.Module(),
-		LibPrefix + "fs":   stdfs.ModuleWithContext(ctx, newTask),
-		LibPrefix + "io":   stdio.Module(),
-		LibPrefix + "json": stdjson.Module(),
+	modules := map[string]map[string]any{
+		LibPrefix + "task":          asAny(newTask.Module()),
+		LibPrefix + "fs":            asAny(stdfs.ModuleWithContext(ctx, newTask)),
+		LibPrefix + "io":            asAny(stdio.Module()),
+		LibPrefix + "json":          asAny(stdjson.Module()),
+		LibPrefix + "time":          stdtime.Module(machine),
+		LibPrefix + "time/duration": stdtime.DurationModule(),
 
 		CeiloPrefix + "bcrypt":     ceilobcrypt.Module(),
-		CeiloPrefix + "net/client": clientModule,
+		CeiloPrefix + "net/client": asAny(clientModule),
+		CeiloPrefix + "net": {
+			"server": serverModule["server"],
+			"client": map[string]any{
+				"request": clientModule["request"],
+			},
+		},
 	}
 
 	for path, funcs := range modules {
-		if err := L.RegisterModule(path, funcs); err != nil {
+		if err := machine.Module(path, moduleMembers(funcs)); err != nil {
 			return fmt.Errorf("error: %v", err)
 		}
 	}
-	if err := registerNetModule(L, serverModule["server"], clientModule["request"]); err != nil {
-		return fmt.Errorf("error: %v", err)
-	}
+	// --------------------------------------------------------------------------------- //
 	if err := registerCallableModule(L, CeiloPrefix+"net/server", "server", serverModule["server"]); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
 	if err := stdprocess.RegisterWithContext(ctx, newTask, L, LibPrefix+"process", opts.Args, newTask.QueueCallback); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
-	if err := stdtime.RegisterModules(L, LibPrefix+"time"); err != nil {
+	// --------------------------------------------------------------------------------- //
+	if err := machine.Do(prelude); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
-
-	pre, err := luau.Compile(prelude)
-	if err == nil {
-		err = L.Load(pre, "=prelude")
-	}
-	if err == nil {
-		_, err = L.Call()
-	}
-	if err != nil {
+	if err := machine.Do(fmt.Sprintf("_G._VERSION = '%s %s'", opts.Runtime.Name, opts.Runtime.Version)); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
 
@@ -190,27 +202,18 @@ func registerCallableModule(state *luau.State, path, name string, fn luau.Func) 
 	return state.RegisterModuleTable(path)
 }
 
-func registerNetModule(state *luau.State, server, clientRequest luau.Func) error {
-	if err := state.NewTable(0, 2); err != nil {
-		return err
+// asAny widens a module's members to map[string]any. It accepts
+// map[string]luau.Func and map[string]any alike.
+func asAny[F any](members map[string]F) map[string]any {
+	out := make(map[string]any, len(members))
+	for name, member := range members {
+		out[name] = member
 	}
-	if err := state.PushFunction("server", server); err != nil {
-		return err
-	}
-	if err := state.SetField(-2, "server"); err != nil {
-		return err
-	}
-	if err := state.NewTable(0, 1); err != nil {
-		return err
-	}
-	if err := state.PushFunction("request", clientRequest); err != nil {
-		return err
-	}
-	if err := state.SetField(-2, "request"); err != nil {
-		return err
-	}
-	if err := state.SetField(-2, "client"); err != nil {
-		return err
-	}
-	return state.RegisterModuleTable(CeiloPrefix + "net")
+	return out
+}
+
+func moduleMembers(funcs map[string]any) map[string]any {
+	members := make(map[string]any, len(funcs))
+	maps.Copy(members, funcs)
+	return members
 }

@@ -6,22 +6,22 @@ import (
 	"testing/fstest"
 
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/Leoj030/go-luau/vm"
 )
 
 func TestHashAndCompare(t *testing.T) {
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@ceilo/bcrypt", Module()); err != nil {
+	if err := v.Module("@ceilo/bcrypt", Module()); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := state.DoString(`
+	if err := v.Do(`
 		local bcrypt = require("@ceilo/bcrypt")
 		local hash = bcrypt.hash("secure123", 4)
 		assert(type(hash) == "string")
@@ -33,19 +33,18 @@ func TestHashAndCompare(t *testing.T) {
 }
 
 func TestCompareInvalidHashUsesModuleError(t *testing.T) {
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@ceilo/bcrypt", Module()); err != nil {
+	if err := v.Module("@ceilo/bcrypt", Module()); err != nil {
 		t.Fatal(err)
 	}
-
-	err = state.DoString(`require("@ceilo/bcrypt").compare("password", "invalid")`)
+	err = v.Do(`require("@ceilo/bcrypt").compare("password", "invalid")`)
 	if err == nil {
 		t.Fatal("compare succeeded with an invalid hash")
 	}
