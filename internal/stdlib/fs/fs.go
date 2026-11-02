@@ -23,14 +23,14 @@ import (
 
 // Module returns the functions of the library, ready for
 // luau.State.RegisterModule.
-func Module() map[string]luau.Func {
+func Module() map[string]any {
 	return ModuleWithContext(context.Background(), nil)
 }
 
 // ModuleWithContext returns the functions of the library. It uses ctx to stop
 // watchers and scheduler to dispatch callbacks and keep the runtime alive.
-func ModuleWithContext(ctx context.Context, scheduler *stdtask.Scheduler) map[string]luau.Func {
-	return map[string]luau.Func{
+func ModuleWithContext(ctx context.Context, scheduler *stdtask.Scheduler) map[string]any {
+	return map[string]any{
 		"readFile":        readfile,
 		"writeFile":       writefile,
 		"appendFile":      appendfile,

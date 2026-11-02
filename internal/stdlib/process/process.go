@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/Leoj030/go-luau/vm"
 	stdtask "github.com/ceilo-org/ceilo/internal/stdlib/task"
 )
 
@@ -34,6 +35,103 @@ type signalHandle struct {
 	stopOnce sync.Once
 }
 
+// Module returns the members of the "@std/process" module and registers the
+// SignalHandle type in v, so call it before registering any module.
+func Module(v *vm.VM, ctx context.Context, scheduler *stdtask.Scheduler, args []string, enqueue func(luau.Ref)) map[string]any {
+	vm.MustRegisterType[*signalHandle](v, vm.TypeSpec{
+		Name: "SignalHandle",
+		Methods: map[string]any{
+			"close": func(h *signalHandle) { h.close() },
+		},
+	})
+
+	return map[string]any{
+		// data
+		"args": args,
+		"env":  environment(),
+
+		// plain functions
+		"pid": os.Getpid,
+		"homedir": func() (string, error) {
+			dir, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("process.homedir: %w", err)
+			}
+			return dir, nil
+		},
+		"cwd": func() (string, error) {
+			dir, err := os.Getwd()
+			if err != nil {
+				return "", fmt.Errorf("process.cwd: %w", err)
+			}
+			return dir, nil
+		},
+		"execPath": func() (string, error) {
+			path, err := os.Executable()
+			if err != nil {
+				return "", fmt.Errorf("process.execPath: %w", err)
+			}
+			return path, nil
+		},
+		"exit": func(code float64) error {
+			if math.IsNaN(code) || math.IsInf(code, 0) || math.Trunc(code) != code || code < 0 || code > 255 {
+				return errors.New("process.exit: exit code must be an integer between 0 and 255")
+			}
+			os.Exit(int(code))
+			return nil
+		},
+
+		// these wait for the child process, so they yield and stay low-level
+		"run":    runWithContext(ctx, scheduler),
+		"system": systemWithContext(ctx, scheduler),
+
+		"onSignal": func(name string, callback *vm.Value) (*signalHandle, error) {
+			if callback == nil || callback.Type() != "function" {
+				return nil, errors.New("process.onSignal: argument 2 must be a function")
+			}
+			if enqueue == nil {
+				return nil, errors.New("process.onSignal: signal callback dispatcher is unavailable")
+			}
+			sig, supported, err := signalValue(name)
+			if err != nil {
+				return nil, err
+			}
+			handle := &signalHandle{
+				stop:    make(chan struct{}),
+				signals: make(chan os.Signal, 1),
+			}
+			if supported {
+				kept, err := callback.Retain() // an argument is released when this function returns
+				if err != nil {
+					return nil, err
+				}
+				osSignal.Notify(handle.signals, sig)
+				go handle.forward(ctx, kept.Ref(), enqueue)
+			}
+			return handle, nil
+		},
+	}
+}
+
+// forward queues the callback each time the signal arrives, until the handle
+// is closed or ctx ends.
+func (h *signalHandle) forward(ctx context.Context, callback luau.Ref, enqueue func(luau.Ref)) {
+	for {
+		select {
+		case <-ctx.Done():
+			h.close()
+			return
+		case <-h.stop:
+			return
+		case _, ok := <-h.signals:
+			if !ok {
+				return
+			}
+			enqueue(callback)
+		}
+	}
+}
+
 // Finalize ensures a signal subscription is released if its handle is collected.
 func (h *signalHandle) Finalize() { h.close() }
 
@@ -42,57 +140,6 @@ func (h *signalHandle) close() {
 		osSignal.Stop(h.signals)
 		close(h.stop)
 	})
-}
-
-// Register registers the process module, including the current script arguments
-// and environment, at path.
-func Register(state *luau.State, path string, args []string, enqueue func(luau.Ref)) error {
-	return RegisterWithContext(context.Background(), nil, state, path, args, enqueue)
-}
-
-// RegisterWithContext registers process operations with task-aware cancellation
-// and signal subscriptions.
-func RegisterWithContext(ctx context.Context, scheduler *stdtask.Scheduler, state *luau.State, path string, args []string, enqueue func(luau.Ref)) error {
-	meta, err := buildSignalHandleMetatable(state)
-	if err != nil {
-		return err
-	}
-	functions := map[string]luau.Func{
-		"homedir":  homedir,
-		"cwd":      cwd,
-		"run":      runWithContext(ctx, scheduler),
-		"system":   systemWithContext(ctx, scheduler),
-		"exit":     exit,
-		"execPath": execPath,
-		"pid":      pid,
-		"onSignal": onSignal(ctx, enqueue, meta),
-	}
-
-	if err := state.NewTable(0, len(functions)+2); err != nil {
-		return err
-	}
-	module := state.Top()
-	for name, fn := range functions {
-		if err := state.PushFunction(name, fn); err != nil {
-			return err
-		}
-		if err := state.SetField(module, name); err != nil {
-			return err
-		}
-	}
-	if err := state.Push(args); err != nil {
-		return err
-	}
-	if err := state.SetField(module, "args"); err != nil {
-		return err
-	}
-	if err := state.Push(environment()); err != nil {
-		return err
-	}
-	if err := state.SetField(module, "env"); err != nil {
-		return err
-	}
-	return state.RegisterModuleTable(path)
 }
 
 func environment() map[string]string {
@@ -104,47 +151,6 @@ func environment() map[string]string {
 		}
 	}
 	return env
-}
-
-func homedir(c *luau.State) (int, error) {
-	dir, err := os.UserHomeDir()
-	if err != nil {
-		return 0, fmt.Errorf("process.homedir: %w", err)
-	}
-	return 1, c.Push(dir)
-}
-
-func cwd(c *luau.State) (int, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return 0, fmt.Errorf("process.cwd: %w", err)
-	}
-	return 1, c.Push(dir)
-}
-
-func execPath(c *luau.State) (int, error) {
-	path, err := os.Executable()
-	if err != nil {
-		return 0, fmt.Errorf("process.execPath: %w", err)
-	}
-	return 1, c.Push(path)
-}
-
-func pid(c *luau.State) (int, error) {
-	return 1, c.Push(os.Getpid())
-}
-
-func exit(c *luau.State) (int, error) {
-	if c.Top() != 1 {
-		return 0, errors.New("process.exit: expected 1 exit code")
-	}
-	value, err := c.Get(1)
-	code, ok := value.(float64)
-	if err != nil || !ok || math.IsNaN(code) || math.IsInf(code, 0) || math.Trunc(code) != code || code < 0 || code > 255 {
-		return 0, errors.New("process.exit: exit code must be an integer between 0 and 255")
-	}
-	os.Exit(int(code))
-	return 0, nil
 }
 
 func runWithContext(ctx context.Context, scheduler *stdtask.Scheduler) luau.Func {
@@ -338,110 +344,6 @@ func stringArg(c *luau.State, fn string, index int) (string, error) {
 		return "", fmt.Errorf("process.%s: argument %d must be a string", fn, index)
 	}
 	return text, nil
-}
-
-func onSignal(ctx context.Context, enqueue func(luau.Ref), meta luau.Ref) luau.Func {
-	return func(c *luau.State) (int, error) {
-		if enqueue == nil {
-			return 0, errors.New("process.onSignal: signal callback dispatcher is unavailable")
-		}
-		if c.Top() != 2 {
-			return 0, fmt.Errorf("process.onSignal: expected 2 arguments, got %d", c.Top())
-		}
-		name, err := stringArg(c, "onSignal", 1)
-		if err != nil {
-			return 0, err
-		}
-		if c.TypeName(2) != "function" {
-			return 0, errors.New("process.onSignal: argument 2 must be a function")
-		}
-		sig, supported, err := signalValue(name)
-		if err != nil {
-			return 0, err
-		}
-		handle := &signalHandle{
-			stop:    make(chan struct{}),
-			signals: make(chan os.Signal, 1),
-		}
-		if supported {
-			callback, err := c.Ref(2)
-			if err != nil {
-				return 0, err
-			}
-			osSignal.Notify(handle.signals, sig)
-			go func() {
-				for {
-					select {
-					case <-ctx.Done():
-						handle.close()
-						return
-					case <-handle.stop:
-						return
-					case _, ok := <-handle.signals:
-						if !ok {
-							return
-						}
-						enqueue(callback)
-					}
-				}
-			}()
-		}
-		if err := c.PushUserdata(handle); err != nil {
-			handle.close()
-			return 0, err
-		}
-		if err := c.PushRef(meta); err != nil {
-			handle.close()
-			return 0, err
-		}
-		if err := c.SetMetatable(-2); err != nil {
-			handle.close()
-			return 0, err
-		}
-		return 1, nil
-	}
-}
-
-func buildSignalHandleMetatable(state *luau.State) (luau.Ref, error) {
-	if err := state.NewTable(0, 2); err != nil {
-		return 0, err
-	}
-	if err := state.NewTable(0, 1); err != nil {
-		return 0, err
-	}
-	if err := state.PushFunction("close", closeSignal); err != nil {
-		return 0, err
-	}
-	if err := state.SetField(-2, "close"); err != nil {
-		return 0, err
-	}
-	if err := state.SetField(-2, "__index"); err != nil {
-		return 0, err
-	}
-	if err := state.Push("The metatable is locked!"); err != nil {
-		return 0, err
-	}
-	if err := state.SetField(-2, "__metatable"); err != nil {
-		return 0, err
-	}
-	ref, err := state.Ref(-1)
-	if err != nil {
-		return 0, err
-	}
-	if err := state.Pop(1); err != nil {
-		return 0, err
-	}
-	return ref, nil
-}
-
-func closeSignal(c *luau.State) (int, error) {
-	value, ok := c.ToUserdata(1)
-	handle, valid := value.(*signalHandle)
-	if !ok || !valid {
-		return 0, errors.New("process.signal.close: expected a signal handle")
-	}
-	handle.close()
-	return 0, nil
 }
 
 func pushResult(c interface{ Push(any) error }, result processResult) error {

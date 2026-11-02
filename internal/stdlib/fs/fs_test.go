@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/Leoj030/go-luau/vm"
 	stdtask "github.com/ceilo-org/ceilo/internal/stdlib/task"
 )
 
@@ -46,15 +47,15 @@ func TestModuleFileAndDirectoryOperations(t *testing.T) {
 	nested := filepath.Join(dir, "nested", "child")
 	nestedRoot := filepath.Join(dir, "nested")
 
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@std/fs", Module()); err != nil {
+	if err := v.Module("@std/fs", Module()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -94,7 +95,7 @@ func TestModuleFileAndDirectoryOperations(t *testing.T) {
 	script = fmt.Sprintf(script, luaString(dir), luaString(file), luaString(copy),
 		luaString(moved), luaString(hardlink), luaString(symlink), luaString(nested),
 		luaString(nestedRoot))
-	if err := state.DoString(script); err != nil {
+	if err := v.Do(script); err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]any{
@@ -105,12 +106,12 @@ func TestModuleFileAndDirectoryOperations(t *testing.T) {
 		"missingExists":     false,
 		"sameCopySucceeded": false,
 	} {
-		got, err := state.GetGlobal(name)
+		got, err := v.State().GetGlobal(name)
 		if err != nil || got != want {
 			t.Errorf("%s = %v, %v; want %v", name, got, err, want)
 		}
 	}
-	walked, err := state.GetGlobal("walkCount")
+	walked, err := v.State().GetGlobal("walkCount")
 	count, ok := walked.(float64)
 	if err != nil || !ok || count < 7 {
 		t.Errorf("walkCount = %v, %v; want at least 7", walked, err)
@@ -144,21 +145,21 @@ func TestTypedefCompiles(t *testing.T) {
 
 func TestWatchCallsBackUntilStopped(t *testing.T) {
 	dir := t.TempDir()
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
 	scheduler := stdtask.New(stdtask.Options{OnError: func(err error) {
 		t.Errorf("watch callback: %v", err)
 	}})
-	scheduler.BindState(state)
+	scheduler.BindState(v.State())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := state.RegisterModule("@std/fs", ModuleWithContext(ctx, scheduler)); err != nil {
+	if err := v.Module("@std/fs", ModuleWithContext(ctx, scheduler)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -184,7 +185,7 @@ func TestWatchCallsBackUntilStopped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	thread, err := state.NewThread()
+	thread, err := v.State().NewThread()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,10 +205,10 @@ func TestWatchCallsBackUntilStopped(t *testing.T) {
 		cancel()
 		t.Fatal("watch callback was not delivered and closed")
 	}
-	if got, err := state.GetGlobal("watchCalled"); err != nil || got != true {
+	if got, err := v.State().GetGlobal("watchCalled"); err != nil || got != true {
 		t.Errorf("watchCalled = %v, %v; want true", got, err)
 	}
-	if got, err := state.GetGlobal("watchReturnedHandle"); err != nil || got != true {
+	if got, err := v.State().GetGlobal("watchReturnedHandle"); err != nil || got != true {
 		t.Errorf("watchReturnedHandle = %v, %v; want true", got, err)
 	}
 }

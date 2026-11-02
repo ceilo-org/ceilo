@@ -88,6 +88,16 @@ type submission struct {
 
 const maxIdleThreads = 256
 
+func (s *Scheduler) Module() map[string]any {
+	return map[string]any{
+		"wait":   s.wait,
+		"spawn":  s.spawn,
+		"defer":  s.deferTask,
+		"delay":  s.delay,
+		"cancel": s.cancel,
+	}
+}
+
 func New(opts Options) *Scheduler {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -266,16 +276,6 @@ func (c *taskControl) context() context.Context {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ctx
-}
-
-func (s *Scheduler) Module() map[string]luau.Func {
-	return map[string]luau.Func{
-		"wait":   s.wait,
-		"spawn":  s.spawn,
-		"defer":  s.deferTask,
-		"delay":  s.delay,
-		"cancel": s.cancel,
-	}
 }
 
 func (s *Scheduler) ModuleFinished(waiter *luau.Thread, err error) {

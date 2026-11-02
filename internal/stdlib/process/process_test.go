@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/Leoj030/go-luau/vm"
 	stdtask "github.com/ceilo-org/ceilo/internal/stdlib/task"
 )
 
@@ -21,12 +22,12 @@ func newTestRuntime(t *testing.T, args []string) (*luau.State, *stdtask.Schedule
 
 func newTestRuntimeWithContext(t *testing.T, ctx context.Context, args []string) (*luau.State, *stdtask.Scheduler) {
 	t.Helper()
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(state.Close)
-	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
+	t.Cleanup(v.Close)
+	if err := v.State().OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
 	scheduler := stdtask.New(stdtask.Options{Context: ctx, OnError: func(err error) {
@@ -35,14 +36,14 @@ func newTestRuntimeWithContext(t *testing.T, ctx context.Context, args []string)
 		}
 		t.Errorf("scheduled callback: %v", err)
 	}})
-	scheduler.BindState(state)
-	if err := state.RegisterModule("@std/task", scheduler.Module()); err != nil {
+	scheduler.BindState(v.State())
+	if err := v.Module("@std/task", scheduler.Module()); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterWithContext(ctx, scheduler, state, "@std/process", args, scheduler.QueueCallback); err != nil {
+	if err := v.Module("@std/process", Module(v, ctx, scheduler, args, scheduler.QueueCallback)); err != nil {
 		t.Fatal(err)
 	}
-	return state, scheduler
+	return v.State(), scheduler
 }
 
 func runScript(t *testing.T, state *luau.State, scheduler *stdtask.Scheduler, source string) {
