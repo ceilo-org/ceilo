@@ -7,22 +7,23 @@ import (
 	"testing/fstest"
 
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/Leoj030/go-luau/vm"
 )
 
 func TestDeserializeAndSerialize(t *testing.T) {
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@std/json", Module()); err != nil {
+	if err := v.Module("@std/json", Module()); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := state.DoString(`
+	if err := v.Do(`
 		local json = require("@std/json")
 		local decoded = json.deserialize('{"name":"Luau","enabled":true,"count":3,"items":[1,"two",null],"meta":{"ok":false}}')
 		local duplicate = json.deserialize('{"value":1,"value":2}')
@@ -51,28 +52,28 @@ func TestDeserializeAndSerialize(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	encoded, err := state.GetGlobal("encoded")
+	encoded, err := v.State().GetGlobal("encoded")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := `{"count":3,"enabled":true,"items":[1,"two"],"meta":{"ok":false},"name":"Luau"}`; encoded != want {
 		t.Errorf("encoded JSON = %q, want %q", encoded, want)
 	}
-	array, err := state.GetGlobal("array")
+	array, err := v.State().GetGlobal("array")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := `[1,"two",false]`; array != want {
 		t.Errorf("encoded array = %q, want %q", array, want)
 	}
-	pretty, err := state.GetGlobal("pretty")
+	pretty, err := v.State().GetGlobal("pretty")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := "{\n  \"enabled\": true,\n  \"name\": \"Luau\"\n}"; pretty != want {
 		t.Errorf("pretty JSON = %q, want %q", pretty, want)
 	}
-	escaped, err := state.GetGlobal("escaped")
+	escaped, err := v.State().GetGlobal("escaped")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +81,7 @@ func TestDeserializeAndSerialize(t *testing.T) {
 		t.Errorf("HTML-escaped JSON = %q, want %q", escaped, want)
 	}
 	for _, name := range []string{"compactWithFalse", "compactByDefault"} {
-		compact, err := state.GetGlobal(name)
+		compact, err := v.State().GetGlobal(name)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -188,15 +189,15 @@ func TestDecodeToLuauRestoresStackAfterInvalidJSON(t *testing.T) {
 }
 
 func TestDeserializeAndSerializeRejectInvalidArguments(t *testing.T) {
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@std/json", Module()); err != nil {
+	if err := v.Module("@std/json", Module()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -208,8 +209,8 @@ func TestDeserializeAndSerializeRejectInvalidArguments(t *testing.T) {
 		`require("@std/json").serialize({}, "extra")`,
 		`require("@std/json").serialize({}, 1)`,
 	} {
-		if err := state.DoString(script); err == nil {
-			t.Errorf("DoString(%q) succeeded, want an error", script)
+		if err := v.Do(script); err == nil {
+			t.Errorf("Do(%q) succeeded, want an error", script)
 		}
 	}
 }

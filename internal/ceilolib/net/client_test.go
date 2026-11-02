@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/Leoj030/go-luau/vm"
 )
 
 func TestClientRequest(t *testing.T) {
@@ -48,15 +49,15 @@ func TestClientRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(nil)); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(nil)); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@ceilo/net/client", ClientModule(context.Background())); err != nil {
+	if err := v.Module("@ceilo/net/client", ClientModule(context.Background())); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,21 +85,21 @@ func TestClientRequest(t *testing.T) {
 		assert(badResponse.ok == false)
 		assert(badResponse.body == "bad request")
 	`, server.URL+"/default", server.URL+"/post", server.URL+"/bad")
-	if err := state.DoString(script); err != nil {
+	if err := v.Do(script); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestClientRequestRejectsInvalidArguments(t *testing.T) {
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(nil)); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(nil)); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@ceilo/net/client", ClientModule(context.Background())); err != nil {
+	if err := v.Module("@ceilo/net/client", ClientModule(context.Background())); err != nil {
 		t.Fatal(err)
 	}
 
@@ -126,7 +127,7 @@ func TestClientRequestRejectsInvalidArguments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := state.DoString(`
+			err := v.Do(`
 				local client = require("@ceilo/net/client")
 				` + tt.call)
 			if err == nil {
@@ -140,22 +141,21 @@ func TestClientRequestRejectsInvalidArguments(t *testing.T) {
 }
 
 func TestClientRequestUsesContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(nil)); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(nil)); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@ceilo/net/client", ClientModule(ctx)); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := v.Module("@ceilo/net/client", ClientModule(ctx)); err != nil {
 		t.Fatal(err)
 	}
 
-	err = state.DoString(`
+	err = v.Do(`
 		local client = require("@ceilo/net/client")
 		client.request("http://127.0.0.1")
 	`)

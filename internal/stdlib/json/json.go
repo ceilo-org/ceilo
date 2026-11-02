@@ -16,8 +16,8 @@ import (
 	"github.com/Leoj030/go-luau/luau"
 )
 
-func Module() map[string]luau.Func {
-	return map[string]luau.Func{
+func Module() map[string]any {
+	return map[string]any{
 		"deserialize": deserialize,
 		"serialize":   serialize,
 	}

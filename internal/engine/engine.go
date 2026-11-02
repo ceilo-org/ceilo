@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"time"
 
@@ -104,36 +103,29 @@ func RunFile(ctx context.Context, opts Options) error {
 	serverModule := ceilonet.ServerModule(ctx, newTask, L, report)
 	clientModule := ceilonet.ClientModule(ctx)
 	modules := map[string]map[string]any{
-		LibPrefix + "task":          asAny(newTask.Module()),
-		LibPrefix + "fs":            asAny(stdfs.ModuleWithContext(ctx, newTask)),
+		LibPrefix + "task":          newTask.Module(),
+		LibPrefix + "fs":            stdfs.ModuleWithContext(ctx, newTask),
 		LibPrefix + "io":            stdio.Module(),
-		LibPrefix + "json":          asAny(stdjson.Module()),
+		LibPrefix + "json":          stdjson.Module(),
 		LibPrefix + "time":          stdtime.Module(machine),
 		LibPrefix + "time/duration": stdtime.DurationModule(),
+		LibPrefix + "process":       stdprocess.Module(machine, ctx, newTask, opts.Args, newTask.QueueCallback),
 
 		CeiloPrefix + "bcrypt":     ceilobcrypt.Module(),
-		CeiloPrefix + "net/client": asAny(clientModule),
+		CeiloPrefix + "net/client": clientModule,
+		CeiloPrefix + "net/server": {"__call": serverModule["server"]},
 		CeiloPrefix + "net": {
 			"server": serverModule["server"],
-			"client": map[string]any{
-				"request": clientModule["request"],
-			},
+			"client": map[string]any{"request": clientModule["request"]},
 		},
 	}
 
-	for path, funcs := range modules {
-		if err := machine.Module(path, moduleMembers(funcs)); err != nil {
-			return fmt.Errorf("error: %v", err)
+	for path, members := range modules {
+		if err := machine.Module(path, members); err != nil {
+			return fmt.Errorf("module %s: %w", path, err)
 		}
 	}
-	// --------------------------------------------------------------------------------- //
-	if err := registerCallableModule(L, CeiloPrefix+"net/server", "server", serverModule["server"]); err != nil {
-		return fmt.Errorf("error: %v", err)
-	}
-	if err := stdprocess.RegisterWithContext(ctx, newTask, L, LibPrefix+"process", opts.Args, newTask.QueueCallback); err != nil {
-		return fmt.Errorf("error: %v", err)
-	}
-	// --------------------------------------------------------------------------------- //
+
 	if err := machine.Do(prelude); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
@@ -175,45 +167,4 @@ func RunFile(ctx context.Context, opts Options) error {
 	}
 
 	return ctx.Err()
-}
-
-func registerCallableModule(state *luau.State, path, name string, fn luau.Func) error {
-	if err := state.NewTable(0, 1); err != nil {
-		return err
-	}
-	if err := state.PushFunction(name, fn); err != nil {
-		return err
-	}
-	if err := state.SetField(-2, name); err != nil {
-		return err
-	}
-	if err := state.NewTable(0, 1); err != nil {
-		return err
-	}
-	if err := state.PushFunction("__call", fn); err != nil {
-		return err
-	}
-	if err := state.SetField(-2, "__call"); err != nil {
-		return err
-	}
-	if err := state.SetMetatable(-2); err != nil {
-		return err
-	}
-	return state.RegisterModuleTable(path)
-}
-
-// asAny widens a module's members to map[string]any. It accepts
-// map[string]luau.Func and map[string]any alike.
-func asAny[F any](members map[string]F) map[string]any {
-	out := make(map[string]any, len(members))
-	for name, member := range members {
-		out[name] = member
-	}
-	return out
-}
-
-func moduleMembers(funcs map[string]any) map[string]any {
-	members := make(map[string]any, len(funcs))
-	maps.Copy(members, funcs)
-	return members
 }

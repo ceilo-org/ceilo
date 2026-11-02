@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/Leoj030/go-luau/vm"
 )
 
 type yieldingRequirer struct {
@@ -18,14 +19,14 @@ func (r *yieldingRequirer) ModuleFinished(waiter *luau.Thread, err error) {
 	r.finished(waiter, err)
 }
 
-func runWithYieldingModule(t *testing.T, main, module string, onError func(error)) (*luau.State, bool) {
+func runWithYieldingModule(t *testing.T, main, module string, onError func(error)) (*vm.VM, bool) {
 	t.Helper()
 
-	L, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(L.Close)
+	t.Cleanup(v.Close)
 
 	scheduler := New(Options{OnError: onError})
 	fsys := fstest.MapFS{
@@ -36,10 +37,10 @@ func runWithYieldingModule(t *testing.T, main, module string, onError func(error
 		Requirer: luau.FSRequirer(fsys),
 		finished: scheduler.ModuleFinished,
 	}
-	if err := L.OpenRequire(requirer); err != nil {
+	if err := v.State().OpenRequire(requirer); err != nil {
 		t.Fatal(err)
 	}
-	if err := L.RegisterModule("@std/task", scheduler.Module()); err != nil {
+	if err := v.Module("@std/task", scheduler.Module()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -47,7 +48,7 @@ func runWithYieldingModule(t *testing.T, main, module string, onError func(error
 	if err != nil {
 		t.Fatal(err)
 	}
-	th, err := L.NewThread()
+	th, err := v.State().NewThread()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,11 +57,11 @@ func runWithYieldingModule(t *testing.T, main, module string, onError func(error
 		t.Fatal(err)
 	}
 	scheduler.Start(th, 0)
-	return L, scheduler.Run()
+	return v, scheduler.Run()
 }
 
 func TestRequireModuleCanYieldOnTaskWait(t *testing.T) {
-	L, ok := runWithYieldingModule(
+	v, ok := runWithYieldingModule(
 		t,
 		`result = require("./module").value`,
 		`local task = require("@std/task"); task.wait(0.001); task.wait(0.001); return {value = 42}`,
@@ -69,13 +70,13 @@ func TestRequireModuleCanYieldOnTaskWait(t *testing.T) {
 	if !ok {
 		t.Fatal("scheduler reported failure")
 	}
-	if got, err := L.GetGlobal("result"); err != nil || got != 42.0 {
+	if got, err := v.State().GetGlobal("result"); err != nil || got != 42.0 {
 		t.Errorf("result = %v, %v; want 42", got, err)
 	}
 }
 
 func TestTaskWaitResumesRegularAndSpawnedTasks(t *testing.T) {
-	L, ok := runWithYieldingModule(
+	v, ok := runWithYieldingModule(
 		t,
 		`local task = require("@std/task"); task.spawn(function() task.wait(0.001); spawned = true end); task.wait(0.002); resumed = true`,
 		`return true`,
@@ -85,14 +86,14 @@ func TestTaskWaitResumesRegularAndSpawnedTasks(t *testing.T) {
 		t.Fatal("scheduler reported failure")
 	}
 	for name := range map[string]bool{"resumed": true, "spawned": true} {
-		if got, err := L.GetGlobal(name); err != nil || got != true {
+		if got, err := v.State().GetGlobal(name); err != nil || got != true {
 			t.Errorf("%s = %v, %v; want true", name, got, err)
 		}
 	}
 }
 
 func TestTaskWaitResumesAfterSpawn(t *testing.T) {
-	L, ok := runWithYieldingModule(
+	v, ok := runWithYieldingModule(
 		t,
 		`local task = require("@std/task")
 		task.spawn(function() spawned = true end)
@@ -105,14 +106,14 @@ func TestTaskWaitResumesAfterSpawn(t *testing.T) {
 		t.Fatal("scheduler reported failure")
 	}
 	for name := range map[string]bool{"resumed": true, "spawned": true} {
-		if got, err := L.GetGlobal(name); err != nil || got != true {
+		if got, err := v.State().GetGlobal(name); err != nil || got != true {
 			t.Errorf("%s = %v, %v; want true", name, got, err)
 		}
 	}
 }
 
 func TestTaskDeferRunsAtNextSchedulerOpportunityWithArguments(t *testing.T) {
-	L, ok := runWithYieldingModule(
+	v, ok := runWithYieldingModule(
 		t,
 		`local task = require("@std/task")
 		local stage = "before yield"
@@ -130,19 +131,19 @@ func TestTaskDeferRunsAtNextSchedulerOpportunityWithArguments(t *testing.T) {
 	if !ok {
 		t.Fatal("scheduler reported failure")
 	}
-	if got, err := L.GetGlobal("handleReturned"); err != nil || got != true {
+	if got, err := v.State().GetGlobal("handleReturned"); err != nil || got != true {
 		t.Errorf("handleReturned = %v, %v; want true", got, err)
 	}
-	if got, err := L.GetGlobal("seenStage"); err != nil || got != "yielding" {
+	if got, err := v.State().GetGlobal("seenStage"); err != nil || got != "yielding" {
 		t.Errorf("seenStage = %v, %v; want yielding", got, err)
 	}
-	if got, err := L.GetGlobal("deferred"); err != nil || got != 12.0 {
+	if got, err := v.State().GetGlobal("deferred"); err != nil || got != 12.0 {
 		t.Errorf("deferred = %v, %v; want 12", got, err)
 	}
 }
 
 func TestTaskCancelStopsDeferredTask(t *testing.T) {
-	L, ok := runWithYieldingModule(
+	v, ok := runWithYieldingModule(
 		t,
 		`local task = require("@std/task")
 		local handle = task.defer(function()
@@ -156,13 +157,13 @@ func TestTaskCancelStopsDeferredTask(t *testing.T) {
 	if !ok {
 		t.Fatal("scheduler reported failure")
 	}
-	if got, err := L.GetGlobal("deferred"); err != nil || got != nil {
+	if got, err := v.State().GetGlobal("deferred"); err != nil || got != nil {
 		t.Errorf("deferred = %v, %v; want nil", got, err)
 	}
 }
 
 func TestTaskCancelStopsSpawnedTaskAfterWait(t *testing.T) {
-	L, ok := runWithYieldingModule(
+	v, ok := runWithYieldingModule(
 		t,
 		`local task = require("@std/task")
 		local handle = task.spawn(function()
@@ -179,16 +180,16 @@ func TestTaskCancelStopsSpawnedTaskAfterWait(t *testing.T) {
 	if !ok {
 		t.Fatal("scheduler reported failure")
 	}
-	if got, err := L.GetGlobal("first"); err != nil || got != true {
+	if got, err := v.State().GetGlobal("first"); err != nil || got != true {
 		t.Errorf("first = %v, %v; want true", got, err)
 	}
-	if got, err := L.GetGlobal("second"); err != nil || got != nil {
+	if got, err := v.State().GetGlobal("second"); err != nil || got != nil {
 		t.Errorf("second = %v, %v; want nil", got, err)
 	}
 }
 
 func TestTaskDelayRunsFunctionWithArguments(t *testing.T) {
-	L, ok := runWithYieldingModule(
+	v, ok := runWithYieldingModule(
 		t,
 		`local task = require("@std/task")
 		local handle = task.delay(0.001, function(a, b)
@@ -202,16 +203,16 @@ func TestTaskDelayRunsFunctionWithArguments(t *testing.T) {
 	if !ok {
 		t.Fatal("scheduler reported failure")
 	}
-	if got, err := L.GetGlobal("handleReturned"); err != nil || got != true {
+	if got, err := v.State().GetGlobal("handleReturned"); err != nil || got != true {
 		t.Errorf("handleReturned = %v, %v; want true", got, err)
 	}
-	if got, err := L.GetGlobal("delayed"); err != nil || got != 42.0 {
+	if got, err := v.State().GetGlobal("delayed"); err != nil || got != 42.0 {
 		t.Errorf("delayed = %v, %v; want 42", got, err)
 	}
 }
 
 func TestTaskCancelStopsDelayedTask(t *testing.T) {
-	L, ok := runWithYieldingModule(
+	v, ok := runWithYieldingModule(
 		t,
 		`local task = require("@std/task")
 		local handle = task.delay(0.02, function()
@@ -226,14 +227,14 @@ func TestTaskCancelStopsDelayedTask(t *testing.T) {
 	if !ok {
 		t.Fatal("scheduler reported failure")
 	}
-	if got, err := L.GetGlobal("delayed"); err != nil || got != nil {
+	if got, err := v.State().GetGlobal("delayed"); err != nil || got != nil {
 		t.Errorf("delayed = %v, %v; want nil", got, err)
 	}
 }
 
 func TestYieldingModuleErrorCanBeCaughtByPcall(t *testing.T) {
 	var errors []error
-	L, ok := runWithYieldingModule(
+	v, ok := runWithYieldingModule(
 		t,
 		`local ok, err = pcall(function() return require("./module") end); result = ok; message = tostring(err)`,
 		`require("@std/task").wait(0.001); error("module failed")`,
@@ -245,10 +246,10 @@ func TestYieldingModuleErrorCanBeCaughtByPcall(t *testing.T) {
 	if len(errors) != 0 {
 		t.Errorf("reported errors = %v; want none", errors)
 	}
-	if got, err := L.GetGlobal("result"); err != nil || got != false {
+	if got, err := v.State().GetGlobal("result"); err != nil || got != false {
 		t.Errorf("result = %v, %v; want false", got, err)
 	}
-	if got, err := L.GetGlobal("message"); err != nil {
+	if got, err := v.State().GetGlobal("message"); err != nil {
 		t.Errorf("reading message: %v", err)
 	} else if message, ok := got.(string); !ok || !strings.Contains(message, "module failed") {
 		t.Errorf("message = %v; want the module error", got)
@@ -313,18 +314,18 @@ func TestRunReturnsWhenNoTasksOrHoldsRemain(t *testing.T) {
 }
 
 func TestSubmitRunsYieldingTaskAndCompletesOnScheduler(t *testing.T) {
-	L, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(L.Close)
+	t.Cleanup(v.Close)
 
 	scheduler := New(Options{OnError: func(err error) { t.Errorf("unexpected task error: %v", err) }})
-	scheduler.BindState(L)
-	if err := L.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
+	scheduler.BindState(v.State())
+	if err := v.State().OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := L.RegisterModule("@std/task", scheduler.Module()); err != nil {
+	if err := v.Module("@std/task", scheduler.Module()); err != nil {
 		t.Fatal(err)
 	}
 	if err := scheduler.Hold(); err != nil {
@@ -344,7 +345,7 @@ func TestSubmitRunsYieldingTaskAndCompletesOnScheduler(t *testing.T) {
 		err   error
 	}
 	completed := make(chan completion, 1)
-	err = scheduler.Submit(L,
+	err = scheduler.Submit(v.State(),
 		func(th *luau.Thread) (int, error) {
 			if err := th.Load(bc, "@submitted.luau"); err != nil {
 				return 0, err
@@ -352,7 +353,7 @@ func TestSubmitRunsYieldingTaskAndCompletesOnScheduler(t *testing.T) {
 			return 0, nil
 		},
 		func(_ *luau.Thread, taskErr error) {
-			value, getErr := L.GetGlobal("submitted")
+			value, getErr := v.State().GetGlobal("submitted")
 			if taskErr == nil {
 				taskErr = getErr
 			}
