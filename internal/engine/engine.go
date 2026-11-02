@@ -106,7 +106,7 @@ func RunFile(ctx context.Context, opts Options) error {
 	modules := map[string]map[string]any{
 		LibPrefix + "task":          asAny(newTask.Module()),
 		LibPrefix + "fs":            asAny(stdfs.ModuleWithContext(ctx, newTask)),
-		LibPrefix + "io":            asAny(stdio.Module()),
+		LibPrefix + "io":            stdio.Module(),
 		LibPrefix + "json":          asAny(stdjson.Module()),
 		LibPrefix + "time":          stdtime.Module(machine),
 		LibPrefix + "time/duration": stdtime.DurationModule(),

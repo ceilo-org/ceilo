@@ -5,6 +5,11 @@ function io.write(...: any): ()
 	error("unimplemented")
 end
 
+--- Writes one or more strings to standard output with a trailing newline.
+function io.writeln(...: any): ()
+	error("unimplemented")
+end
+
 --- Reads a line from standard input. If `prompt` is provided, it is written to stdout before waiting for input.
 function io.input(prompt: string?): string
 	error("unimplemented")
