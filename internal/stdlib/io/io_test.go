@@ -6,18 +6,19 @@ import (
 	"testing/fstest"
 
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/Leoj030/go-luau/vm"
 )
 
 func TestWriteConcatenatesArgumentsAndArrayTable(t *testing.T) {
-	state, err := luau.NewState()
+	v, err := vm.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer state.Close()
-	if err := state.OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
+	defer v.Close()
+	if err := v.State().OpenRequire(luau.FSRequirer(fstest.MapFS{})); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.RegisterModule("@std/io", Module()); err != nil {
+	if err := v.Module("@std/io", Module()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -31,7 +32,7 @@ func TestWriteConcatenatesArgumentsAndArrayTable(t *testing.T) {
 	os.Stdout = output
 	defer func() { os.Stdout = originalStdout }()
 
-	if err := state.DoString(`
+	if err := v.Do(`
 		local io = require("@std/io")
 		io.write("hello", " ", 42, {"!", "?"})
 		io.write({" array", " table"})
@@ -49,7 +50,7 @@ func TestWriteConcatenatesArgumentsAndArrayTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "hello 42!? array table"; string(got) != want {
+	if want := "hello\t \t42\t!\t?\t array\t table\t"; string(got) != want {
 		t.Errorf("write output = %q, want %q", got, want)
 	}
 }
