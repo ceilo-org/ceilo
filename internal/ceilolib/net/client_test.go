@@ -149,7 +149,9 @@ func TestClientRequestUsesContext(t *testing.T) {
 	if err := v.State().OpenRequire(luau.FSRequirer(nil)); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.Module("@ceilo/net/client", ClientModule(context.Background())); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := v.Module("@ceilo/net/client", ClientModule(ctx)); err != nil {
 		t.Fatal(err)
 	}
 
