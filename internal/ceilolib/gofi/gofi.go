@@ -3,8 +3,8 @@ package gofi
 import (
 	"context"
 
-	"github.com/ceilo-org/ceilo/internal/stdlib/task"
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/ceilo-org/ceilo/internal/stdlib/task"
 	"github.com/ceilo-org/gofi/host"
 )
 
