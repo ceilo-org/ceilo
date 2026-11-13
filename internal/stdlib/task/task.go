@@ -1,4 +1,4 @@
-// task.go
+// Package time implements the "@std/task" Luau library.
 package task
 
 import (

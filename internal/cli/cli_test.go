@@ -45,7 +45,12 @@ func TestHelpListsCommands(t *testing.T) {
 func TestHelpForACommand(t *testing.T) {
 	for _, args := range [][]string{{"help", "run"}, {"run", "-h"}} {
 		code, stdout, _ := invoke(t, args...)
-		if code != 0 || !strings.Contains(stdout, "-timeout") || !strings.Contains(stdout, "Usage:") {
+		if code != 0 || !strings.Contains(stdout, "-m, --memory int") ||
+			!strings.Contains(stdout, "-t, --timeout duration") ||
+			strings.Count(stdout, "memory limit in MiB") != 1 ||
+			strings.Count(stdout, "stop the script after this long") != 1 ||
+			strings.Contains(stdout, "\n  -m int") || strings.Contains(stdout, "\n  --memory int") ||
+			!strings.Contains(stdout, "Usage:") {
 			t.Errorf("%v: code %d, stdout %q", args, code, stdout)
 		}
 	}
@@ -61,6 +66,38 @@ func TestUnknownCommand(t *testing.T) {
 func TestUnknownFlag(t *testing.T) {
 	code, _, stderr := invoke(t, "run", "-nope", "x.luau")
 	if code != 2 || !strings.Contains(stderr, "not defined") {
+		t.Errorf("got code %d and stderr %q", code, stderr)
+	}
+}
+
+func TestRunFlagsCanAppearBeforeOrAfterScript(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "hello.luau")
+	if err := os.WriteFile(script, []byte("assert(select('#', ...) == 2)"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"run", "--timeout=5s", script, "a", "-b"},
+		{"run", "-t=5s", script, "a", "-b"},
+		{"run", "-t=5s", "-m=32", script, "a", "-b"},
+		{"run", script, "--timeout=5s", "a", "-b"},
+		{"run", script, "-t=5s", "a", "-b"},
+		{"run", script, "-t=5s", "-m=32", "a", "-b"},
+		{"--timeout=5s", "run", script, "a", "-b"},
+		{"-t=5s", "run", script, "a", "-b"},
+		{"-t=5s", "-m=32", "run", script, "a", "-b"},
+		{"--timeout=5s", script, "a", "-b"},
+	} {
+		code, _, stderr := invoke(t, args...)
+		if code != 0 {
+			t.Errorf("%v: code %d, stderr %q", args, code, stderr)
+		}
+	}
+}
+
+func TestRunFlagValuesRequireEquals(t *testing.T) {
+	code, _, stderr := invoke(t, "run", "--timeout", "5s", "missing.luau")
+	if code != 2 || !strings.Contains(stderr, "flag needs an argument") {
 		t.Errorf("got code %d and stderr %q", code, stderr)
 	}
 }
@@ -107,10 +144,14 @@ func TestScriptShorthandAndArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Flags go before the script, and everything after it belongs to the script.
-	code, _, stderr := invoke(t, "run", "-timeout", "5s", script, "a", "-b")
+	// Flags can appear before or after the script; non-flag arguments stay ordered.
+	code, _, stderr := invoke(t, "run", "--timeout=5s", script, "a", "-b")
 	if code != 0 {
 		t.Errorf("run: code %d, stderr %q", code, stderr)
+	}
+	code, _, stderr = invoke(t, "run", script, "a", "--timeout=5s", "-b")
+	if code != 0 {
+		t.Errorf("run with trailing flag: code %d, stderr %q", code, stderr)
 	}
 
 	// "luaurt script.luau" is short for "luaurt run script.luau".

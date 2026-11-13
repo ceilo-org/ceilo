@@ -1,9 +1,7 @@
-github.com/Leoj030/go-luau v0.1.0-dev.6 h1:Nn5hO7gN19PG4xKIi4U0g9DJ1fhpsWD136GTtuI3yCo=
-github.com/Leoj030/go-luau v0.1.0-dev.6/go.mod h1:q40/OQl/AgVqOEXoChVGCaXBxx1egOJuk5wbPPNqf5s=
-github.com/Leoj030/go-luau v0.1.0-dev.7 h1:sUjRaCBKD9ve9oQgQbjwEMHfbxG+DUEZQdt+bU9qGk8=
-github.com/Leoj030/go-luau v0.1.0-dev.7/go.mod h1:q40/OQl/AgVqOEXoChVGCaXBxx1egOJuk5wbPPNqf5s=
-github.com/Leoj030/go-luau v0.1.0-dev.8 h1:3/9aG8BqvmhJnk0GhYgoRYdNZv9c0DqwIn8TGlYWgP8=
-github.com/Leoj030/go-luau v0.1.0-dev.8/go.mod h1:q40/OQl/AgVqOEXoChVGCaXBxx1egOJuk5wbPPNqf5s=
+github.com/Leoj030/go-luau v0.1.0-dev.10 h1:No5cs8BZ0Q8DoEKZNchiazsV4JpzSc8+rS4w1j770BE=
+github.com/Leoj030/go-luau v0.1.0-dev.10/go.mod h1:q40/OQl/AgVqOEXoChVGCaXBxx1egOJuk5wbPPNqf5s=
+github.com/ceilo-org/gofi v0.0.2 h1:ugvAOMHMVEfc8a2oIQ93QMb+PK61QIqiy1LOXIDfmII=
+github.com/ceilo-org/gofi v0.0.2/go.mod h1:NDt6bhqm07KWks8O9B3pLWrOoCuMNdpfrohlE1ubMRo=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 golang.org/x/crypto v0.58.0 h1:COkYLr4k7nDI4r6QtMML2AfzeIswWHAJthLS6K/M/54=

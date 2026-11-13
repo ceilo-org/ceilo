@@ -8,7 +8,7 @@ import (
 type helpCmd struct{ app *App }
 
 func (*helpCmd) Name() string              { return "help" }
-func (*helpCmd) Synopsis() string          { return "Show help for a command" }
+func (*helpCmd) Synopsis() string          { return "Print this help info" }
 func (*helpCmd) Usage() string             { return "help [command]" }
 func (*helpCmd) SetFlags(fs *flag.FlagSet) {}
 
