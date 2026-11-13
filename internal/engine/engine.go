@@ -15,6 +15,7 @@ import (
 	"github.com/Leoj030/go-luau/vm"
 
 	ceilobcrypt "github.com/ceilo-org/ceilo/internal/ceilolib/bcrypt"
+	ceilogofi "github.com/ceilo-org/ceilo/internal/ceilolib/gofi"
 	ceilonet "github.com/ceilo-org/ceilo/internal/ceilolib/net"
 
 	stdfs "github.com/ceilo-org/ceilo/internal/stdlib/fs"
@@ -78,6 +79,10 @@ func RunFile(ctx context.Context, opts Options) error {
 		}
 		vmOptions = append(vmOptions, vm.WithMemoryLimit(opts.MemoryMiB<<20))
 	}
+	if opts.Timeout > 0 {
+		fmt.Printf("Timeout duration: %.2f\n", opts.Timeout.Seconds())
+	}
+
 	machine, err := vm.New(vmOptions...)
 	if err != nil {
 		return fmt.Errorf("error: %w", err)
@@ -111,6 +116,7 @@ func RunFile(ctx context.Context, opts Options) error {
 		LibPrefix + "time/duration": stdtime.DurationModule(),
 		LibPrefix + "process":       stdprocess.Module(machine, ctx, newTask, opts.Args, newTask.QueueCallback),
 
+		CeiloPrefix + "gofi":       ceilogofi.Module(newTask),
 		CeiloPrefix + "bcrypt":     ceilobcrypt.Module(),
 		CeiloPrefix + "net/client": clientModule,
 		CeiloPrefix + "net/server": {"__call": serverModule["server"]},

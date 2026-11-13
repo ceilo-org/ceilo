@@ -14,13 +14,17 @@ type runCmd struct {
 	memory  int
 }
 
-func (*runCmd) Name() string     { return "run" }
-func (*runCmd) Synopsis() string { return "Run a Luau script" }
-func (*runCmd) Usage() string    { return "run [flags] <script> [arguments...]" }
+func (*runCmd) Name() string { return "run" }
+func (*runCmd) Synopsis() string {
+	return "Run a Luau script; value flags use --flag=value and may appear anywhere"
+}
+func (*runCmd) Usage() string { return "run <script> [flags]" }
 
 func (c *runCmd) SetFlags(fs *flag.FlagSet) {
 	fs.DurationVar(&c.timeout, "timeout", 0, "stop the script after this long, such as 30s (0 means no limit)")
+	fs.DurationVar(&c.timeout, "t", 0, "stop the script after this long, such as 30s (0 means no limit)")
 	fs.IntVar(&c.memory, "memory", 0, "memory limit in MiB (0 means no limit)")
+	fs.IntVar(&c.memory, "m", 0, "memory limit in MiB (0 means no limit)")
 }
 
 func (c *runCmd) Execute(ctx context.Context, env Env, args []string) error {
