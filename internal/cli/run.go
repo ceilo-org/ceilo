@@ -2,37 +2,28 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"strings"
-	"time"
 
 	"github.com/ceilo-org/ceilo/internal/engine"
 )
 
 type runCmd struct {
-	timeout time.Duration
-	memory  int
+	memory int
 }
 
 func (*runCmd) Name() string { return "run" }
 func (*runCmd) Synopsis() string {
-	return "Run a Luau script; value flags use --flag=value and may appear anywhere"
+	return "Run a Luau script"
 }
 func (*runCmd) Usage() string { return "run <script> [flags]" }
 
-func (c *runCmd) SetFlags(fs *flag.FlagSet) {
-	fs.DurationVar(&c.timeout, "timeout", 0, "stop the script after this long, such as 30s (0 means no limit)")
-	fs.DurationVar(&c.timeout, "t", 0, "stop the script after this long, such as 30s (0 means no limit)")
-	fs.IntVar(&c.memory, "memory", 0, "memory limit in MiB (0 means no limit)")
-	fs.IntVar(&c.memory, "m", 0, "memory limit in MiB (0 means no limit)")
+func (c *runCmd) SetFlags(fs *Flags) {
+	fs.IntVar(&c.memory, "memory", "m", "memory limit in MiB (0 means no limit)")
 }
 
 func (c *runCmd) Execute(ctx context.Context, env Env, args []string) error {
 	if len(args) == 0 {
 		return usageErrorf("run", "run needs a script to run")
-	}
-	if c.timeout < 0 || c.memory < 0 {
-		return usageErrorf("run", "-timeout and -memory can't be negative")
 	}
 	script := args[0]
 	if !strings.HasSuffix(script, ".luau") {
@@ -41,7 +32,6 @@ func (c *runCmd) Execute(ctx context.Context, env Env, args []string) error {
 	return engine.RunFile(ctx, engine.Options{
 		Script:    script,
 		Args:      args[1:],
-		Timeout:   c.timeout,
 		MemoryMiB: c.memory,
 		Stdin:     env.Stdin,
 		Stdout:    env.Stdout,

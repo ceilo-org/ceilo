@@ -46,9 +46,8 @@ func TestHelpForACommand(t *testing.T) {
 	for _, args := range [][]string{{"help", "run"}, {"run", "-h"}} {
 		code, stdout, _ := invoke(t, args...)
 		if code != 0 || !strings.Contains(stdout, "-m, --memory int") ||
-			!strings.Contains(stdout, "-t, --timeout duration") ||
 			strings.Count(stdout, "memory limit in MiB") != 1 ||
-			strings.Count(stdout, "stop the script after this long") != 1 ||
+			strings.Contains(stdout, "timeout") ||
 			strings.Contains(stdout, "\n  -m int") || strings.Contains(stdout, "\n  --memory int") ||
 			!strings.Contains(stdout, "Usage:") {
 			t.Errorf("%v: code %d, stdout %q", args, code, stdout)
@@ -77,16 +76,11 @@ func TestRunFlagsCanAppearBeforeOrAfterScript(t *testing.T) {
 	}
 
 	for _, args := range [][]string{
-		{"run", "--timeout=5s", script, "a", "-b"},
-		{"run", "-t=5s", script, "a", "-b"},
-		{"run", "-t=5s", "-m=32", script, "a", "-b"},
-		{"run", script, "--timeout=5s", "a", "-b"},
-		{"run", script, "-t=5s", "a", "-b"},
-		{"run", script, "-t=5s", "-m=32", "a", "-b"},
-		{"--timeout=5s", "run", script, "a", "-b"},
-		{"-t=5s", "run", script, "a", "-b"},
-		{"-t=5s", "-m=32", "run", script, "a", "-b"},
-		{"--timeout=5s", script, "a", "-b"},
+		{"run", "--memory=32", script, "a", "-b"},
+		{"run", "-m=32", script, "a", "-b"},
+		{"run", script, "-m=32", "a", "-b"},
+		{"-m=32", "run", script, "a", "-b"},
+		{"-m=32", script, "a", "-b"},
 	} {
 		code, _, stderr := invoke(t, args...)
 		if code != 0 {
@@ -95,10 +89,68 @@ func TestRunFlagsCanAppearBeforeOrAfterScript(t *testing.T) {
 	}
 }
 
-func TestRunFlagValuesRequireEquals(t *testing.T) {
-	code, _, stderr := invoke(t, "run", "--timeout", "5s", "missing.luau")
-	if code != 2 || !strings.Contains(stderr, "flag needs an argument") {
-		t.Errorf("got code %d and stderr %q", code, stderr)
+func TestFlagsSupportAliasesAndBooleanFlagsAnywhere(t *testing.T) {
+	flags := newFlags("test")
+	var check bool
+	var output string
+	var mode string
+	flags.BoolVar(&check, "check", "c", false, "check without writing")
+	flags.StringVar(&output, "output", "o", "write output")
+	flags.OptionalStringVar(&mode, "mode", "M", "default", "select a mode")
+
+	flagArgs, commandArgs := flags.splitArgs([]string{"main", "--check", "-o=bin/new-app", "--mode", "tail"})
+	if err := flags.Parse(flagArgs); err != nil {
+		t.Fatal(err)
+	}
+	if !check || output != "bin/new-app" || mode != "default" {
+		t.Errorf("check = %t, output = %q, mode = %q", check, output, mode)
+	}
+	if got := append(flags.Args(), commandArgs...); strings.Join(got, ",") != "main,tail" {
+		t.Errorf("command args = %v, want [main tail]", got)
+	}
+}
+
+func TestOptionalValueFlagAcceptsExplicitValue(t *testing.T) {
+	flags := newFlags("test")
+	var mode string
+	flags.OptionalStringVar(&mode, "mode", "M", "default", "select a mode")
+
+	if err := flags.Parse([]string{"-M=fast"}); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "fast" {
+		t.Errorf("mode = %q, want fast", mode)
+	}
+}
+
+func TestOptionalValueFlagBeforePositionalAndRequiredFlagWithoutValue(t *testing.T) {
+	flags := newFlags("test")
+	var optional, required string
+	flags.OptionalStringVar(&optional, "optional", "", "default", "optional value")
+	flags.StringVar(&required, "required", "", "required value")
+
+	flagArgs, commandArgs := flags.splitArgs([]string{"--optional", "main"})
+	if err := flags.Parse(flagArgs); err != nil {
+		t.Fatal(err)
+	}
+	if optional != "default" || strings.Join(commandArgs, ",") != "main" {
+		t.Errorf("optional = %q, command args = %v", optional, commandArgs)
+	}
+
+	requiredFlags, _ := flags.splitArgs([]string{"--required"})
+	if err := flags.Parse(requiredFlags); err == nil || !strings.Contains(err.Error(), "flag needs an argument") {
+		t.Errorf("Parse(--required) error = %v, want missing-argument error", err)
+	}
+}
+
+func TestOptionalValueFlagIsMarkedInHelp(t *testing.T) {
+	flags := newFlags("test")
+	var mode string
+	flags.OptionalStringVar(&mode, "mode", "M", "default", "select a mode")
+	var help strings.Builder
+	flags.Print(&help)
+	if got := help.String(); !strings.Contains(got, "-M, --mode [string]") {
+		t.Errorf("optional value not marked in help: %q", got)
 	}
 }
 
@@ -144,12 +196,12 @@ func TestScriptShorthandAndArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Flags can appear before or after the script; non-flag arguments stay ordered.
-	code, _, stderr := invoke(t, "run", "--timeout=5s", script, "a", "-b")
+	// Memory flags can appear before or after the script; non-flag arguments stay ordered.
+	code, _, stderr := invoke(t, "run", "--memory=32", script, "a", "-b")
 	if code != 0 {
 		t.Errorf("run: code %d, stderr %q", code, stderr)
 	}
-	code, _, stderr = invoke(t, "run", script, "a", "--timeout=5s", "-b")
+	code, _, stderr = invoke(t, "run", script, "-m=32", "a", "-b")
 	if code != 0 {
 		t.Errorf("run with trailing flag: code %d, stderr %q", code, stderr)
 	}
