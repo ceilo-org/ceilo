@@ -1,16 +1,13 @@
 package cli
 
-import (
-	"context"
-	"flag"
-)
+import "context"
 
 type helpCmd struct{ app *App }
 
-func (*helpCmd) Name() string              { return "help" }
-func (*helpCmd) Synopsis() string          { return "Print this help info" }
-func (*helpCmd) Usage() string             { return "help [command]" }
-func (*helpCmd) SetFlags(fs *flag.FlagSet) {}
+func (*helpCmd) Name() string     { return "help" }
+func (*helpCmd) Synopsis() string { return "Print this help info" }
+func (*helpCmd) Usage() string    { return "help [command]" }
+func (*helpCmd) SetFlags(*Flags)  {}
 
 func (c *helpCmd) Execute(ctx context.Context, env Env, args []string) error {
 	switch len(args) {

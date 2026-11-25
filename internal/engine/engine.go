@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"github.com/Leoj030/go-luau/luau"
+	"github.com/Leoj030/go-luau/version"
 	"github.com/Leoj030/go-luau/vm"
 
 	ceilobcrypt "github.com/ceilo-org/ceilo/internal/ceilolib/bcrypt"
@@ -29,7 +29,6 @@ import (
 type Options struct {
 	Script    string
 	Args      []string
-	Timeout   time.Duration
 	MemoryMiB int
 	Stdin     io.Reader
 	Stdout    io.Writer
@@ -78,9 +77,6 @@ func RunFile(ctx context.Context, opts Options) error {
 			return fmt.Errorf("error: memory limit too large")
 		}
 		vmOptions = append(vmOptions, vm.WithMemoryLimit(opts.MemoryMiB<<20))
-	}
-	if opts.Timeout > 0 {
-		fmt.Printf("Timeout duration: %.2f\n", opts.Timeout.Seconds())
 	}
 
 	machine, err := vm.New(vmOptions...)
@@ -135,7 +131,7 @@ func RunFile(ctx context.Context, opts Options) error {
 	if err := machine.Do(prelude); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
-	if err := machine.Do(fmt.Sprintf("_G._VERSION = '%s %s'", opts.Runtime.Name, opts.Runtime.Version)); err != nil {
+	if err := machine.Do(fmt.Sprintf("_G._VERSION = '%s %s+' .. %s", opts.Runtime.Name, opts.Runtime.Version, version.Luau())); err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
 

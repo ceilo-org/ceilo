@@ -4,14 +4,11 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
-	"reflect"
 	"sort"
 	"strings"
-	"time"
 )
 
 // Env is everything the commands need from the outside world. Commands use
@@ -29,9 +26,9 @@ type Command interface {
 	Synopsis() string // one line for the command list
 	Usage() string    // the usage line, such as "run [flags] <script> [arguments...]"
 
-	// SetFlags registers the command's flags on fs. Commands keep the
-	// values in their own fields.
-	SetFlags(fs *flag.FlagSet)
+	// SetFlags registers the command's flags. Commands keep the values in
+	// their own fields.
+	SetFlags(fs *Flags)
 
 	// Execute runs the command. args are what is left after the flags.
 	Execute(ctx context.Context, env Env, args []string) error
@@ -110,43 +107,17 @@ func (a *App) dispatch(ctx context.Context, args []string) error {
 		}
 	}
 
-	fs := flag.NewFlagSet(cmd.Name(), flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.Usage = func() {}
+	fs := newFlags(cmd.Name())
 	cmd.SetFlags(fs)
-	flagArgs, commandArgs := splitFlagArgs(fs, rest)
+	flagArgs, commandArgs := fs.splitArgs(rest)
 	if err := fs.Parse(flagArgs); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
+		if errors.Is(err, errFlagHelp) {
 			a.printCommandHelp(a.env.Stdout, cmd)
 			return nil
 		}
 		return usageErrorf(cmd.Name(), "%v", err)
 	}
 	return cmd.Execute(ctx, a.env, append(fs.Args(), commandArgs...))
-}
-
-// splitFlagArgs extracts registered flags wherever they occur before the
-// command's -- separator, preserving the order of positional arguments.
-func splitFlagArgs(fs *flag.FlagSet, args []string) (flags, commandArgs []string) {
-	options := true
-	positionalSeen := false
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if options && arg == "--" {
-			commandArgs = append(commandArgs, args[i+1:]...)
-			break
-		}
-		if options && strings.HasPrefix(arg, "-") && arg != "-" {
-			name := strings.TrimLeft(strings.SplitN(arg, "=", 2)[0], "-")
-			if fs.Lookup(name) != nil || !positionalSeen {
-				flags = append(flags, arg)
-				continue
-			}
-		}
-		positionalSeen = true
-		commandArgs = append(commandArgs, arg)
-	}
-	return flags, commandArgs
 }
 
 // looksLikeScript reports whether name is a script file rather than a
@@ -220,95 +191,12 @@ func (a *App) printHelp(w io.Writer) {
 func (a *App) printCommandHelp(w io.Writer, cmd Command) {
 	fmt.Fprintf(w, "Usage:\n  %s %s\n\n%s\n", a.env.Name, cmd.Usage(), cmd.Synopsis())
 
-	fs := flag.NewFlagSet(cmd.Name(), flag.ContinueOnError)
+	fs := newFlags(cmd.Name())
 	cmd.SetFlags(fs)
-	flags := make([]*flag.Flag, 0)
-	fs.VisitAll(func(f *flag.Flag) { flags = append(flags, f) })
-	if len(flags) > 0 {
+	if fs.HasFlags() {
 		fmt.Fprintln(w, "\nFlags:")
 		fmt.Fprintln(w, "  -h, --help")
 		fmt.Fprintln(w, "        Print this help info")
-		printFlags(w, flags)
-	}
-}
-
-func printFlags(w io.Writer, flags []*flag.Flag) {
-	type group struct {
-		usage string
-		typ   string
-		names []string
-	}
-
-	groups := make([]group, 0, len(flags))
-	groupIndexes := make(map[string]int, len(flags))
-	for _, f := range flags {
-		valueName := flagValueName(f)
-		key := f.Usage + "\x00" + valueName
-		index, ok := groupIndexes[key]
-		if !ok {
-			index = len(groups)
-			groupIndexes[key] = index
-			groups = append(groups, group{usage: f.Usage, typ: valueName})
-		}
-		prefix := "--"
-		if len(f.Name) == 1 {
-			prefix = "-"
-		}
-		groups[index].names = append(groups[index].names, prefix+f.Name)
-	}
-
-	for _, group := range groups {
-		fmt.Fprintf(w, "  %s", strings.Join(group.names, ", "))
-		if group.typ != "" {
-			fmt.Fprintf(w, " %s", group.typ)
-		}
-		fmt.Fprintf(w, "\n        %s\n", group.usage)
-	}
-}
-
-func flagValueName(f *flag.Flag) string {
-	getter, ok := f.Value.(flag.Getter)
-	if !ok {
-		return "value"
-	}
-	value := getter.Get()
-	if _, ok := value.(bool); ok {
-		return ""
-	}
-	if _, ok := value.(time.Duration); ok {
-		return "duration"
-	}
-	if value == nil {
-		return "value"
-	}
-	switch reflect.TypeOf(value).Kind() {
-	case reflect.Int:
-		return "int"
-	case reflect.Int8:
-		return "int8"
-	case reflect.Int16:
-		return "int16"
-	case reflect.Int32:
-		return "int32"
-	case reflect.Int64:
-		return "int64"
-	case reflect.Uint:
-		return "uint"
-	case reflect.Uint8:
-		return "uint8"
-	case reflect.Uint16:
-		return "uint16"
-	case reflect.Uint32:
-		return "uint32"
-	case reflect.Uint64:
-		return "uint64"
-	case reflect.Float32:
-		return "float"
-	case reflect.Float64:
-		return "float"
-	case reflect.String:
-		return "string"
-	default:
-		return "value"
+		fs.Print(w)
 	}
 }
