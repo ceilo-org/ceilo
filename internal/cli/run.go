@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ceilo-org/ceilo/internal/engine"
@@ -25,10 +27,7 @@ func (c *runCmd) Execute(ctx context.Context, env Env, args []string) error {
 	if len(args) == 0 {
 		return usageErrorf("run", "run needs a script to run")
 	}
-	script := args[0]
-	if !strings.HasSuffix(script, ".luau") {
-		script += ".luau"
-	}
+	script, _ := resolveScript(args[0])
 	return engine.RunFile(ctx, engine.Options{
 		Script:    script,
 		Args:      args[1:],
@@ -44,4 +43,56 @@ func (c *runCmd) Execute(ctx context.Context, env Env, args []string) error {
 			Version: env.Version,
 		},
 	})
+}
+
+// resolveScript resolves name to an existing script file path, checking the
+// direct path (with .luau appended if missing) and falling back to scripts/.
+func resolveScript(name string) (string, bool) {
+	hasExt := strings.HasSuffix(name, ".luau")
+	withExt := name
+	if !hasExt {
+		withExt = name + ".luau"
+	}
+
+	if isRegularFile(withExt) {
+		return withExt, true
+	}
+	if !hasExt && isRegularFile(name) {
+		return name, true
+	}
+
+	if canCheckScriptsDir(name) {
+		inScriptsWithExt := filepath.Join("scripts", withExt)
+		if isRegularFile(inScriptsWithExt) {
+			return inScriptsWithExt, true
+		}
+		if !hasExt {
+			inScripts := filepath.Join("scripts", name)
+			if isRegularFile(inScripts) {
+				return inScripts, true
+			}
+		}
+	}
+
+	return withExt, false
+}
+
+func canCheckScriptsDir(name string) bool {
+	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		return false
+	}
+	if name == "." || name == ".." {
+		return false
+	}
+	for _, prefix := range []string{"./", "../", `.\`, `..\`} {
+		if strings.HasPrefix(name, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func isRegularFile(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular()
 }

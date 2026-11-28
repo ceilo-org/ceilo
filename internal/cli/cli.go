@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 )
@@ -126,12 +125,8 @@ func looksLikeScript(name string) bool {
 	if strings.HasSuffix(name, ".luau") || strings.HasSuffix(name, ".lua") {
 		return true
 	}
-	st, err := os.Stat(name)
-	if err == nil && st.Mode().IsRegular() {
-		return true
-	}
-	st, err = os.Stat(name + ".luau")
-	return err == nil && st.Mode().IsRegular()
+	_, ok := resolveScript(name)
+	return ok
 }
 
 // exitCode prints err (if there is one) and returns the exit code for it.
