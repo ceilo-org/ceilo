@@ -224,3 +224,56 @@ func TestScriptShorthandAndArguments(t *testing.T) {
 		t.Errorf("extensionless shorthand: code %d, stderr %q", code, stderr)
 	}
 }
+
+func TestScriptsDirectoryFallback(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	if err := os.MkdirAll("scripts", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("scripts", "dev.luau"), []byte(`
+		local fs = require("@std/fs")
+		assert(select(1, ...) == "arg1")
+		fs.writeFile("ran.txt", "scripts")
+	`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"dev", "arg1"},
+		{"dev.luau", "arg1"},
+		{"run", "dev", "arg1"},
+		{"run", "dev.luau", "arg1"},
+		{"-m=32", "dev", "arg1"},
+		{"dev", "-m=32", "arg1"},
+	} {
+		_ = os.Remove("ran.txt")
+		code, _, stderr := invoke(t, args...)
+		got, err := os.ReadFile("ran.txt")
+		if code != 0 || err != nil || string(got) != "scripts" {
+			t.Errorf("%v: code %d, got %q, readErr %v, stderr %q", args, code, string(got), err, stderr)
+		}
+	}
+
+	// Explicit relative path ./dev should not fall back to scripts/dev.luau.
+	code, _, stderr := invoke(t, "./dev")
+	if code != 2 || !strings.Contains(stderr, `unknown command "./dev"`) {
+		t.Errorf("./dev: code %d, stderr %q", code, stderr)
+	}
+
+	// A script in the working directory takes precedence over scripts/.
+	if err := os.WriteFile("dev.luau", []byte(`
+		local fs = require("@std/fs")
+		assert(select(1, ...) == "arg1")
+		fs.writeFile("ran.txt", "cwd")
+	`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove("ran.txt")
+	code, _, stderr = invoke(t, "dev", "arg1")
+	got, err := os.ReadFile("ran.txt")
+	if code != 0 || err != nil || string(got) != "cwd" {
+		t.Errorf("cwd precedence: code %d, got %q, readErr %v, stderr %q", code, string(got), err, stderr)
+	}
+}
