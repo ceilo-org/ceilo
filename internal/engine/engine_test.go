@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Leoj030/go-luau/luau"
 )
 
 func TestRunFileReturnsContextCanceledAfterServerShutdown(t *testing.T) {
@@ -230,5 +232,82 @@ func TestRunFileServesRequestsWithNet(t *testing.T) {
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("RunFile error = %v; want context.Canceled", err)
+	}
+}
+
+func TestDiskRequirerAliasFallback(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, src string) {
+		t.Helper()
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("main.luau", `return 1`)
+	write(".ceilo/.luaurc", `{"aliases": {"std": "./std"}}`)
+	write(".ceilo/std/net.luau", `return "net"`)
+
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(old) })
+
+	d, err := NewDiskRequirer(func(*luau.Thread, error) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := d.Reset("@main.luau"); got != luau.NavSuccess {
+		t.Fatalf("Reset = %v, want NavSuccess", got)
+	}
+	if got := d.ToAliasFallback("std"); got != luau.NavSuccess {
+		t.Fatalf("ToAliasFallback(std) = %v, want NavSuccess", got)
+	}
+	if got := d.ToChild("net"); got != luau.NavSuccess {
+		t.Fatalf("ToChild(net) = %v, want NavSuccess", got)
+	}
+	if !d.ModulePresent() {
+		t.Fatal("expected a module under the cursor")
+	}
+	info, err := d.Module()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "@.ceilo/std/net.luau"; info.Chunkname != want {
+		t.Errorf("Chunkname = %q, want %q", info.Chunkname, want)
+	}
+}
+
+func TestDiskRequirerUnknownAliasStaysUnknown(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.luau"), []byte(`return 1`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(old) })
+
+	d, err := NewDiskRequirer(func(*luau.Thread, error) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Reset("@main.luau"); got != luau.NavSuccess {
+		t.Fatalf("Reset = %v, want NavSuccess", got)
+	}
+	if got := d.ToAliasFallback("nope"); got != luau.NavNotFound {
+		t.Errorf("ToAliasFallback(nope) = %v, want NavNotFound", got)
 	}
 }

@@ -1,6 +1,6 @@
 {
     "aliases": {
-        "std": "./typedefs/std",
-        "ceilo": "./typedefs/ceilo"
+        "std": "../typedefs/std",
+        "ceilo": "../typedefs/ceilo"
     }
 }
