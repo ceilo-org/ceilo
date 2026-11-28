@@ -1,7 +1,5 @@
-github.com/Leoj030/go-luau v0.1.0-dev.10 h1:No5cs8BZ0Q8DoEKZNchiazsV4JpzSc8+rS4w1j770BE=
-github.com/Leoj030/go-luau v0.1.0-dev.10/go.mod h1:q40/OQl/AgVqOEXoChVGCaXBxx1egOJuk5wbPPNqf5s=
-github.com/Leoj030/go-luau v0.1.0-dev.11 h1:KGyp/2fgFaZ7/rZO5Dmt3UWktCCVDXlsNdMf4GobtyE=
-github.com/Leoj030/go-luau v0.1.0-dev.11/go.mod h1:q40/OQl/AgVqOEXoChVGCaXBxx1egOJuk5wbPPNqf5s=
+github.com/Leoj030/go-luau v0.1.0-dev.12 h1:buJxuyzx6N33ocNUJowgnRMQrn0bZzW1MLtE6oZ64HQ=
+github.com/Leoj030/go-luau v0.1.0-dev.12/go.mod h1:q40/OQl/AgVqOEXoChVGCaXBxx1egOJuk5wbPPNqf5s=
 github.com/ceilo-org/gofi v0.0.2 h1:ugvAOMHMVEfc8a2oIQ93QMb+PK61QIqiy1LOXIDfmII=
 github.com/ceilo-org/gofi v0.0.2/go.mod h1:NDt6bhqm07KWks8O9B3pLWrOoCuMNdpfrohlE1ubMRo=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=

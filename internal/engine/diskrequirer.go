@@ -34,8 +34,16 @@ func NewDiskRequirer(onModuleFinished func(*luau.Thread, error)) (*diskRequirer,
 	}
 	// "/" on Unix, the current drive on Windows. Other drives are out of reach.
 	root := filepath.VolumeName(cwd) + string(filepath.Separator)
+	// WithConfigFallback takes paths inside the FS, and the FS is rooted at the
+	// top of the disk, so the .ceilo directory in the working directory has to
+	// be given relative to root, not as ".ceilo".
+	ceiloDir, err := filepath.Rel(root, filepath.Join(cwd, ".ceilo"))
+	if err != nil {
+		return nil, err
+	}
+
 	return &diskRequirer{
-		Requirer:         luau.FSRequirer(os.DirFS(root)),
+		Requirer:         luau.FSRequirer(os.DirFS(root), luau.WithConfigFallback(filepath.ToSlash(ceiloDir))),
 		root:             root,
 		cwd:              cwd,
 		onModuleFinished: onModuleFinished,
@@ -89,6 +97,18 @@ func (d *diskRequirer) AllowRequire(chunkname string) bool {
 
 func (d *diskRequirer) Reset(chunkname string) luau.NavResult {
 	return d.Requirer.Reset(d.toFS(chunkname))
+}
+
+var _ luau.AliasFallbackRequirer = (*diskRequirer)(nil)
+
+// ToAliasFallback forwards to the FSRequirer underneath. Embedding the
+// luau.Requirer interface only promotes Requirer's own methods, so without
+// this the fallback is never seen by Luau.
+func (d *diskRequirer) ToAliasFallback(alias string) luau.NavResult {
+	if f, ok := d.Requirer.(luau.AliasFallbackRequirer); ok {
+		return f.ToAliasFallback(alias)
+	}
+	return luau.NavNotFound
 }
 
 func (d *diskRequirer) Module() (luau.ModuleInfo, error) {
